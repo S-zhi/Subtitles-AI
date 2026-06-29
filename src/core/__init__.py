@@ -1,0 +1,30 @@
+"""核心业务层：流水线各阶段（下载 / 提取音频 / 识别 / 翻译 / 烧录）。
+
+每个模块遵循「输入明确、输出明确」的解耦原则，可单独测试、单独重跑。
+"""
+
+from .downloader import (
+    DownloadError,
+    DownloadProgress,
+    DownloadResult,
+    download_video,
+)
+from .audio_extractor import (
+    AudioExtractError,
+    AudioProgress,
+    AudioResult,
+    extract_audio,
+)
+
+__all__ = [
+    # ① 下载
+    "download_video",
+    "DownloadResult",
+    "DownloadProgress",
+    "DownloadError",
+    # ② 提取音频
+    "extract_audio",
+    "AudioResult",
+    "AudioProgress",
+    "AudioExtractError",
+]

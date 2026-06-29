@@ -1,0 +1,21 @@
+[project]
+name = "subtrans-backend"
+version = "0.1.0"
+description = "视频字幕翻译工作台 - 后端（下载 / 识别 / 翻译 / 烧录流水线）"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "yt-dlp>=2024.0.0",
+    # 后续阶段再加：fastapi, uvicorn, rq, redis, faster-whisper, httpx ...
+]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

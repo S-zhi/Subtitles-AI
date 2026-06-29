@@ -1,0 +1,271 @@
+"""流水线第②步：从视频提取音频。
+
+输入：source.mp4（下载阶段的产物） + 任务 ID
+输出：AudioResult（其中 audio_path 指向 data/{task_id}/audio.wav）
+
+用 ffmpeg 把视频音轨抽成 16kHz 单声道 PCM WAV，这是 Whisper / faster-whisper
+的标准输入格式：提前重采样能减小体积、避免识别阶段重复转码。
+
+进度通过 on_progress 回调透传（解析 ffmpeg 的 -progress 输出），供编排层转 SSE。
+
+依赖：ffmpeg、ffprobe（需在 PATH 中，或用 SUBTRANS_FFMPEG / SUBTRANS_FFPROBE 指定）。
+"""
+
+from __future__ import annotations
+
+import logging
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Optional
+
+from src.config import settings, ensure_task_dir, AUDIO_FILENAME
+
+logger = logging.getLogger(__name__)
+
+
+class AudioExtractError(RuntimeError):
+    """提取音频阶段失败。"""
+
+
+@dataclass
+class AudioProgress:
+    """单次进度回调的数据。percent 为 0-100；总时长未知时为 None。"""
+
+    percent: Optional[float]
+    processed_seconds: float          # 已处理的媒体时长（秒）
+    total_seconds: Optional[float]    # 媒体总时长（秒）
+
+
+@dataclass
+class AudioResult:
+    """提取结果。"""
+
+    audio_path: Path
+    sample_rate: int
+    channels: int
+    duration: Optional[float]   # 秒
+    filesize: Optional[int]     # 字节
+
+
+ProgressHook = Callable[[AudioProgress], None]
+
+
+def extract_audio(
+    video_path: Path | str,
+    task_id: str,
+    on_progress: Optional[ProgressHook] = None,
+    *,
+    sample_rate: Optional[int] = None,
+    channels: Optional[int] = None,
+) -> AudioResult:
+    """从视频提取音频到 data/{task_id}/audio.wav。
+
+    Args:
+        video_path: 输入视频路径（通常是下载阶段的 source.mp4）。
+        task_id: 任务 ID，决定输出目录。
+        on_progress: 可选进度回调。
+        sample_rate: 采样率，默认取配置（16000）。
+        channels: 声道数，默认取配置（1）。
+
+    Returns:
+        AudioResult
+
+    Raises:
+        AudioExtractError: 输入不存在、ffmpeg 失败或产物缺失。
+    """
+    video_path = Path(video_path)
+    if not video_path.exists():
+        raise AudioExtractError(f"输入视频不存在: {video_path}")
+
+    if not _has_audio_stream(video_path):
+        raise AudioExtractError("源视频不包含音频流，无法提取音频")
+
+    sr = sample_rate or settings.audio_sample_rate
+    ch = channels or settings.audio_channels
+
+    out_dir = ensure_task_dir(task_id)
+    audio_path = out_dir / AUDIO_FILENAME
+
+    total = _probe_duration(video_path)
+
+    cmd = [
+        settings.ffmpeg_bin,
+        "-y",                      # 覆盖已存在文件（支持重跑）
+        "-i", str(video_path),
+        "-vn",                     # 丢弃视频流
+        "-ac", str(ch),
+        "-ar", str(sr),
+        "-c:a", "pcm_s16le",       # 16-bit PCM WAV
+        "-progress", "pipe:1",     # 进度以 key=value 写到 stdout
+        "-nostats",
+        "-loglevel", "error",      # 真正的错误才写 stderr
+        str(audio_path),
+    ]
+
+    logger.info("开始提取音频: task=%s -> %s", task_id, audio_path.name)
+    _run_ffmpeg(cmd, total, on_progress)
+
+    if not audio_path.exists() or audio_path.stat().st_size == 0:
+        raise AudioExtractError("ffmpeg 执行完成但未生成有效音频文件")
+
+    result = AudioResult(
+        audio_path=audio_path,
+        sample_rate=sr,
+        channels=ch,
+        duration=total,
+        filesize=_safe_filesize(audio_path),
+    )
+    logger.info(
+        "音频提取完成: task=%s file=%s (%.1f MB, %s)",
+        task_id,
+        audio_path.name,
+        (result.filesize or 0) / 1024 / 1024,
+        f"{total:.1f}s" if total else "时长未知",
+    )
+    return result
+
+
+def _run_ffmpeg(
+    cmd: list[str],
+    total_seconds: Optional[float],
+    on_progress: Optional[ProgressHook],
+) -> None:
+    """执行 ffmpeg 并解析 -progress 输出，逐步回调进度。"""
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+    except FileNotFoundError as e:
+        raise AudioExtractError(
+            f"找不到 ffmpeg（{cmd[0]}）。请安装 ffmpeg 或设置 SUBTRANS_FFMPEG。"
+        ) from e
+
+    assert proc.stdout is not None
+    last_pct = -1.0
+    for line in proc.stdout:
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key == "out_time_us" and on_progress is not None:
+            processed = _parse_us(value)
+            if processed is None:
+                continue
+            pct = None
+            if total_seconds and total_seconds > 0:
+                pct = max(0.0, min(100.0, processed / total_seconds * 100.0))
+            # 去抖：百分比无变化时不重复回调
+            if pct is None or round(pct, 1) != last_pct:
+                last_pct = round(pct, 1) if pct is not None else last_pct
+                _safe_call(on_progress, AudioProgress(
+                    percent=round(pct, 1) if pct is not None else None,
+                    processed_seconds=processed,
+                    total_seconds=total_seconds,
+                ))
+        elif key == "progress" and value == "end":
+            if on_progress is not None:
+                _safe_call(on_progress, AudioProgress(
+                    percent=100.0 if total_seconds else None,
+                    processed_seconds=total_seconds or 0.0,
+                    total_seconds=total_seconds,
+                ))
+
+    proc.wait()
+    if proc.returncode != 0:
+        stderr = proc.stderr.read() if proc.stderr else ""
+        raise AudioExtractError(f"ffmpeg 提取音频失败（退出码 {proc.returncode}）: {stderr.strip()}")
+
+
+def _has_audio_stream(video_path: Path) -> bool:
+    """用 ffprobe 判断是否存在音频流。ffprobe 不可用时返回 True（交给 ffmpeg 兜底）。"""
+    cmd = [
+        settings.ffprobe_bin,
+        "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=index",
+        "-of", "csv=p=0",
+        str(video_path),
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return True
+    if out.returncode != 0:
+        return True
+    return bool(out.stdout.strip())
+
+
+def _probe_duration(video_path: Path) -> Optional[float]:
+    """用 ffprobe 探测媒体总时长（秒）。失败返回 None（不影响提取，只是没法算百分比）。"""
+    cmd = [
+        settings.ffprobe_bin,
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(video_path),
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        return float(out.stdout.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def _parse_us(value: str) -> Optional[float]:
+    """把 ffmpeg 的 out_time_us（微秒）转成秒。"""
+    try:
+        return int(value) / 1_000_000
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_call(hook: ProgressHook, p: AudioProgress) -> None:
+    try:
+        hook(p)
+    except Exception:  # 回调异常不应中断提取
+        logger.exception("进度回调异常，已忽略")
+
+
+def _safe_filesize(path: Path) -> Optional[int]:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return None
+
+
+if __name__ == "__main__":
+    # 独立测试入口：python -m src.core.audio_extractor <video_path> [task_id]
+    import sys
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+    if len(sys.argv) < 2:
+        print("用法: python -m src.core.audio_extractor <video_path> [task_id]")
+        raise SystemExit(1)
+
+    in_path = sys.argv[1]
+    test_task = sys.argv[2] if len(sys.argv) > 2 else "manual_test"
+
+    def _print_progress(p: AudioProgress) -> None:
+        if p.percent is not None:
+            print(f"\r提取中 {p.percent:5.1f}%  ({p.processed_seconds:.1f}s)", end="", flush=True)
+        else:
+            print(f"\r提取中 {p.processed_seconds:.1f}s", end="", flush=True)
+
+    res = extract_audio(in_path, test_task, on_progress=_print_progress)
+    print("\n提取结果:")
+    print(f"  文件: {res.audio_path}")
+    print(f"  采样率: {res.sample_rate} Hz")
+    print(f"  声道: {res.channels}")
+    print(f"  时长: {res.duration} 秒")
+    print(f"  大小: {(res.filesize or 0) / 1024 / 1024:.2f} MB")
