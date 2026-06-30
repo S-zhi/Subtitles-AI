@@ -6,14 +6,23 @@
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
-  min-height: 100dvh;
+  position: relative;
+  z-index: 2;
+  width: min(100%, 1280px);
+  height: min(860px, calc(100dvh - clamp(28px, 5vw, 56px)));
+  min-height: 640px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 26px;
+  background: var(--bg);
+  box-shadow:
+    0 34px 120px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
 /* ---------- 侧边工具栏 ---------- */
 .sidebar {
-  position: sticky;
-  top: 0;
-  height: 100dvh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -61,22 +70,9 @@
 
 .sidebar__spacer { flex: 1; }
 .sidebar__foot {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: center;
   gap: 8px; padding: 10px 6px 2px; border-top: 1px solid var(--border);
 }
-.env-pill {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 11.5px; color: var(--text-2);
-  padding: 4px 9px; border-radius: var(--r-pill);
-  background: var(--surface-2); border: 1px solid var(--border);
-  white-space: nowrap;
-}
-.env-pill::before {
-  content: ""; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--text-3);
-}
-.env-pill[data-mode="live"]::before { background: var(--ok); }
-.env-pill[data-mode="mock"]::before { background: var(--amber); }
 
 /* ---------- 内容区 ---------- */
 .content {
@@ -85,6 +81,7 @@
   min-width: 0;
   padding: 26px clamp(20px, 3.5vw, 44px) 64px;
   max-width: 1160px;
+  overflow: auto;
 }
 
 .view { display: none; }
@@ -97,9 +94,20 @@
 
 /* ---------- 窄屏：侧栏转顶部条 ---------- */
 @media (max-width: 820px) {
-  .app { grid-template-columns: 1fr; }
+  body {
+    padding: 12px;
+    place-items: center;
+  }
+  .app {
+    grid-template-columns: 1fr;
+    width: min(100%, 760px);
+    height: calc(100dvh - 24px);
+    min-height: 0;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 20px;
+  }
   .sidebar {
-    position: sticky; height: auto; flex-direction: row; align-items: center;
+    position: sticky; top: 0; height: auto; flex-direction: row; align-items: center;
     gap: 10px; padding: 8px 14px;
     border-right: 0; border-bottom: 1px solid var(--border);
   }

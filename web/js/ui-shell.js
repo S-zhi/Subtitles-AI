@@ -1,8 +1,7 @@
-/* 外壳：侧边导航 / 视图切换 / 筛选 / 环境标识，全部由 store 状态驱动。 */
+/* 外壳：侧边导航 / 视图切换 / 筛选，全部由 store 状态驱动。 */
 
 import { $, $$ } from "./utils.js";
 import { state, subscribe, setView, setFilter } from "./store.js";
-import { USE_MOCK } from "./api.js";
 
 export function initShell() {
   $("#nav").addEventListener("click", (e) => {
@@ -14,15 +13,6 @@ export function initShell() {
     const chip = e.target.closest(".chip");
     if (chip) setFilter(chip.dataset.filter);
   });
-
-  const pill = $("#envPill");
-  if (USE_MOCK) {
-    pill.textContent = "示例数据";
-    pill.dataset.mode = "mock";
-  } else {
-    pill.textContent = "已连接后端";
-    pill.dataset.mode = "live";
-  }
 
   subscribe(syncShell);
   syncShell();
