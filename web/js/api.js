@@ -1,0 +1,141 @@
+/* 数据层：真实接口（REST + SSE）与 mock，按 config 切换。契约与后端一致。 */
+
+import { TERMINAL } from "./constants.js";
+import { uid, clamp, shortUrl, statusForProgress } from "./utils.js";
+
+const CFG = window.APP_CONFIG;
+export const USE_MOCK = CFG.USE_MOCK;
+
+const RealApi = {
+  base: CFG.API_BASE_URL,
+
+  async createTask(payload) {
+    const res = await fetch(`${this.base}/api/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error("创建任务失败：" + res.status);
+    return res.json();
+  },
+
+  async listTasks() {
+    const res = await fetch(`${this.base}/api/tasks`);
+    if (!res.ok) throw new Error("获取任务列表失败：" + res.status);
+    return res.json();
+  },
+
+  async deleteTask(id) {
+    const res = await fetch(`${this.base}/api/tasks/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error("删除失败：" + res.status);
+  },
+
+  async retryTask(id) {
+    const res = await fetch(`${this.base}/api/tasks/${id}/retry`, { method: "POST" });
+    if (!res.ok) throw new Error("重试失败：" + res.status);
+    return res.json();
+  },
+
+  // SSE 订阅单任务进度，返回取消函数
+  subscribeProgress(id, onUpdate) {
+    const es = new EventSource(`${this.base}/api/tasks/${id}/stream`);
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        onUpdate(data);
+        if (TERMINAL.has(data.status)) es.close();
+      } catch (_) {}
+    };
+    es.onerror = () => es.close();
+    return () => es.close();
+  },
+
+  downloadUrl(id, kind) {
+    return kind === "subtitle"
+      ? `${this.base}/api/tasks/${id}/subtitle`
+      : `${this.base}/api/tasks/${id}/download`;
+  },
+};
+
+const MockApi = (() => {
+  const STORE_KEY = "subtrans_mock_tasks_v1";
+
+  function seed() {
+    const now = Date.now();
+    return [
+      {
+        id: uid(), url: "https://example.com/watch?v=demo-finished", title: "示例视频 · 已完成",
+        sourceLang: "en", targetLang: "zh-CN", mode: "bilingual", burn: "hard", model: "small",
+        engine: "deepseek", status: "SUCCESS", progress: 100, error: null,
+        createdAt: now - 1000 * 60 * 42, outputs: { video: "#", subtitle: "#" }, _sim: false,
+      },
+      {
+        id: uid(), url: "https://example.com/watch?v=demo-running", title: null,
+        sourceLang: "auto", targetLang: "zh-CN", mode: "mono", burn: "hard", model: "small",
+        engine: "deepseek", status: "TRANSCRIBING", progress: 48, error: null,
+        createdAt: now - 1000 * 90, outputs: null, _sim: true,
+      },
+      {
+        id: uid(), url: "https://example.com/watch?v=demo-failed", title: null,
+        sourceLang: "auto", targetLang: "ja", mode: "mono", burn: "soft", model: "medium",
+        engine: "deepseek", status: "FAILED", progress: 22,
+        error: "未设置 REPLICATE_API_TOKEN（请在 .env 中配置）",
+        createdAt: now - 1000 * 60 * 8, outputs: null, _sim: false,
+      },
+    ];
+  }
+
+  let tasks;
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    tasks = raw ? JSON.parse(raw) : seed();
+  } catch (e) {
+    tasks = seed();
+  }
+  const persist = () => {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(tasks)); } catch (e) {}
+  };
+  const find = (id) => tasks.find((t) => t.id === id);
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  return {
+    async createTask(payload) {
+      const t = {
+        id: uid(), url: payload.url, title: null,
+        sourceLang: payload.sourceLang, targetLang: payload.targetLang,
+        mode: payload.mode, burn: payload.burn, model: payload.model, engine: payload.engine,
+        status: "PENDING", progress: 0, error: null, createdAt: Date.now(), outputs: null, _sim: true,
+      };
+      tasks.unshift(t); persist(); await delay(150); return { ...t };
+    },
+    async listTasks() { await delay(300); return tasks.map((t) => ({ ...t })); },
+    async deleteTask(id) { tasks = tasks.filter((t) => t.id !== id); persist(); await delay(80); },
+    async retryTask(id) {
+      const t = find(id);
+      if (t) { t.status = "PENDING"; t.progress = 0; t.error = null; t._sim = true; persist(); }
+      return { ...t };
+    },
+    subscribeProgress(id, onUpdate) {
+      const t = find(id);
+      if (!t || !t._sim) return () => {};
+      let stopped = false;
+      const tick = () => {
+        if (stopped) return;
+        t.progress = clamp(t.progress + 3 + Math.random() * 8, 0, 100);
+        t.status = statusForProgress(t.progress);
+        if (t.progress >= 100) {
+          t.status = "SUCCESS"; t.title = "示例视频 · " + shortUrl(t.url);
+          t.outputs = { video: "#", subtitle: "#" }; t._sim = false;
+        }
+        persist();
+        onUpdate({ id: t.id, status: t.status, progress: Math.round(t.progress), title: t.title, outputs: t.outputs, error: t.error });
+        if (!TERMINAL.has(t.status)) setTimeout(tick, 700 + Math.random() * 500);
+      };
+      setTimeout(tick, 500);
+      return () => { stopped = true; };
+    },
+    downloadUrl() { return "#"; },
+  };
+})();
+
+export const Api = USE_MOCK ? MockApi : RealApi;

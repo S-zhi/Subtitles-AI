@@ -1,0 +1,144 @@
+/* ============================================================
+   Subtitles AI - queue
+   处理队列：横向任务单元 + 5 段阶段轨道 + 空/加载/错误态
+   ============================================================ */
+
+.queue__head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.queue__head h2 { font-size: 15px; }
+.filters { display: flex; gap: 2px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-control); padding: 3px; }
+
+.queue__list { display: flex; flex-direction: column; gap: 10px; }
+
+/* ---------- 任务单元（横向行） ---------- */
+.qrow {
+  display: grid;
+  grid-template-columns: 38px 1fr auto;
+  gap: 14px;
+  align-items: start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-row);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-1);
+  transition: border-color var(--dur), background var(--dur), transform var(--dur);
+}
+.qrow:hover { border-color: var(--border-2); }
+.qrow.entering { animation: rowIn 0.34s var(--ease) backwards; }
+@keyframes rowIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* 状态图标瓦片（非装饰性圆点，承载语义） */
+.qrow__status {
+  display: grid; place-items: center;
+  width: 38px; height: 38px; border-radius: 10px;
+  font-size: 18px;
+  background: var(--surface-3); color: var(--text-2);
+}
+.qrow.is-active .qrow__status { background: var(--accent-soft); color: var(--accent); }
+.qrow.is-success .qrow__status { background: var(--ok-soft); color: var(--ok); }
+.qrow.is-failed .qrow__status { background: var(--danger-soft); color: var(--danger); }
+.qrow.is-active .qrow__status i { animation: spin 1.6s linear infinite; }
+
+.qrow__main { min-width: 0; }
+.qrow__titleline { display: flex; align-items: center; gap: 10px; }
+.qrow__title {
+  font-size: 14px; font-weight: 600; line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+.qrow__badge { margin-left: auto; flex: none; }
+.qrow__url {
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-top: 2px;
+}
+.qrow__meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+
+/* 进度 + 阶段轨道 */
+.qrow__progress { margin-top: 12px; }
+.progress-line {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; margin-bottom: 8px;
+}
+.progress-line__step { font-size: 12.5px; color: var(--text-2); }
+.progress-line__pct { font-size: 12.5px; color: var(--text); }
+
+/* 阶段轨道：5 段 */
+.track { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.track__seg { display: flex; flex-direction: column; gap: 5px; }
+.track__bar {
+  height: 3px; border-radius: 999px; background: var(--surface-3);
+  overflow: hidden; position: relative;
+}
+.track__bar::after {
+  content: ""; position: absolute; inset: 0;
+  background: var(--accent); transform: scaleX(0); transform-origin: left;
+  transition: transform 0.5s var(--ease);
+}
+.track__seg.is-done .track__bar::after { transform: scaleX(1); }
+.track__seg.is-current .track__bar::after {
+  transform: scaleX(1);
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent) 60%, transparent 100%);
+  background-size: 200% 100%;
+  animation: flow 1.4s linear infinite;
+}
+.track__label { font-size: 10.5px; color: var(--text-3); text-align: center; transition: color var(--dur); }
+.track__seg.is-current .track__label { color: var(--accent-text); font-weight: 550; }
+.track__seg.is-done .track__label { color: var(--text-2); }
+
+/* 完成态：细成功条 */
+.donebar { height: 3px; border-radius: 999px; background: var(--ok); opacity: 0.85; }
+
+/* 失败提示（可操作） */
+.qrow__error {
+  margin-top: 12px; padding: 10px 12px;
+  background: var(--danger-soft); border-radius: var(--r-control);
+  font-size: 12.5px; color: var(--danger-text);
+}
+.qrow__error b { font-weight: 600; }
+.qrow__hint { margin-top: 5px; color: var(--text-2); font-size: 12px; }
+.qrow__hint code {
+  font-family: var(--font-mono); font-size: 11.5px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  padding: 1px 5px; border-radius: 5px;
+}
+
+/* 行操作 */
+.qrow__actions { display: flex; align-items: center; gap: 2px; }
+
+/* ---------- 状态：加载骨架 ---------- */
+.skel { border-radius: var(--r-row); border: 1px solid var(--border); background: var(--surface); padding: 14px 16px; display: grid; grid-template-columns: 38px 1fr; gap: 14px; }
+.skel__tile { width: 38px; height: 38px; border-radius: 10px; }
+.skel__lines { display: flex; flex-direction: column; gap: 9px; }
+.sk { border-radius: 6px; background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%); background-size: 400% 100%; animation: shimmer 1.4s ease infinite; height: 11px; }
+
+/* ---------- 状态：空 / 错误 ---------- */
+.state {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 8px; padding: 52px 24px;
+  border: 1px dashed var(--border-2); border-radius: var(--r-panel);
+  color: var(--text-2);
+}
+.state__icon {
+  display: grid; place-items: center;
+  width: 46px; height: 46px; border-radius: 13px;
+  background: var(--surface-2); color: var(--text-3); font-size: 23px;
+  margin-bottom: 2px;
+}
+.state--error .state__icon { background: var(--danger-soft); color: var(--danger); }
+.state__title { font-size: 14.5px; font-weight: 600; color: var(--text); }
+.state__desc { font-size: 12.5px; max-width: 360px; }
+.state__desc code { font-family: var(--font-mono); font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--border); padding: 1px 5px; border-radius: 5px; }
+.state__action { margin-top: 8px; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes flow { to { background-position: -200% 0; } }
+@keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+
+@media (max-width: 560px) {
+  .qrow { grid-template-columns: 32px 1fr; }
+  .qrow__status { width: 32px; height: 32px; font-size: 16px; }
+  .qrow__actions { grid-column: 1 / -1; justify-content: flex-end; margin-top: 4px; }
+}
