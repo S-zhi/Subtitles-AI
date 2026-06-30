@@ -1,0 +1,96 @@
+"""ffmpeg / ffprobe 公共工具：时长探测 + 带进度执行。
+
+供 ⑤烧录字幕使用（②提取音频暂保留自己的实现，未来可统一到这里）。
+"""
+
+from __future__ import annotations
+
+import logging
+import subprocess
+from pathlib import Path
+from typing import Callable, Optional
+
+logger = logging.getLogger(__name__)
+
+
+def probe_duration(path: Path | str, ffprobe_bin: str = "ffprobe") -> Optional[float]:
+    """探测媒体总时长（秒）。失败返回 None。"""
+    cmd = [
+        ffprobe_bin,
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        return float(out.stdout.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+_subtitles_filter_cache: Optional[bool] = None
+
+
+def has_subtitles_filter(ffmpeg_bin: str = "ffmpeg") -> bool:
+    """检测 ffmpeg 是否带 subtitles 滤镜（即编译了 libass）。结果缓存。"""
+    global _subtitles_filter_cache
+    if _subtitles_filter_cache is not None:
+        return _subtitles_filter_cache
+    try:
+        out = subprocess.run(
+            [ffmpeg_bin, "-hide_banner", "-filters"],
+            capture_output=True, text=True, timeout=15,
+        )
+        _subtitles_filter_cache = " subtitles " in out.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        _subtitles_filter_cache = False
+    return _subtitles_filter_cache
+
+
+def run_ffmpeg(
+    cmd: list[str],
+    on_tick: Optional[Callable[[float], None]] = None,
+    *,
+    error_cls: type[Exception] = RuntimeError,
+    not_found_msg: Optional[str] = None,
+    cwd: Optional[str] = None,
+) -> None:
+    """执行 ffmpeg 命令，解析 -progress 输出并回调 on_tick(已处理秒数)。
+
+    要求 cmd 中带有 `-progress pipe:1`。失败抛 error_cls。
+    cwd 用于让滤镜参数引用相对文件名，规避路径转义问题。
+    """
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            cwd=cwd,
+        )
+    except FileNotFoundError as e:
+        raise error_cls(not_found_msg or f"找不到可执行文件: {cmd[0]}") from e
+
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        line = line.strip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key == "out_time_us" and on_tick is not None:
+            try:
+                on_tick(int(value) / 1_000_000)
+            except (ValueError, TypeError):
+                pass
+
+    proc.wait()
+    if proc.returncode != 0:
+        stderr = proc.stderr.read() if proc.stderr else ""
+        raise error_cls(f"ffmpeg 执行失败（退出码 {proc.returncode}）: {stderr.strip()}")

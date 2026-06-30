@@ -79,6 +79,7 @@ def _call_deepseek(messages: list, *, api_key: str, base_url: str, model: str, t
             "messages": messages,
             "temperature": 0.3,
             "stream": False,
+            "max_tokens": 4096,
         },
         timeout=timeout,
     )
@@ -95,7 +96,10 @@ def translate_texts(
     api_key: Optional[str] = None,
     on_batch: Optional[BatchHook] = None,
 ) -> List[str]:
-    """翻译一批文本，保持顺序与数量一致。"""
+    """翻译一批文本，保持顺序与数量一致。
+
+    数量不匹配时自动减半批量重试（模型可能截断长 JSON）。
+    """
     if not texts:
         return []
     key = api_key or settings.deepseek_api_key
@@ -106,15 +110,35 @@ def translate_texts(
     out: List[str] = []
     for start in range(0, len(texts), batch_size):
         batch = texts[start:start + batch_size]
-        translated = _translate_batch(batch, source_lang, target_lang, key)
-        if len(translated) != len(batch):
-            raise TranslateError(
-                f"翻译结果数量不匹配：期望 {len(batch)}，实际 {len(translated)}"
-            )
+        translated = _translate_with_fallback(batch, source_lang, target_lang, key)
         out.extend(translated)
         if on_batch is not None:
             on_batch(len(out), len(texts))
     return out
+
+
+def _translate_with_fallback(
+    batch: List[str], source_lang: str, target_lang: str, api_key: str
+) -> List[str]:
+    """翻译一个批次，数量不匹配时自动减半拆分重试。"""
+    size = len(batch)
+    try:
+        translated = _translate_batch(batch, source_lang, target_lang, api_key)
+        if len(translated) == size:
+            return translated
+    except Exception:
+        pass
+
+    if size <= 1:
+        raise TranslateError(
+            f"翻译失败：即使单条也无法获得匹配结果"
+        )
+    # 减半拆分：递归处理两个子批
+    half = max(1, size // 2)
+    logger.warning("批量 %d 翻译结果不匹配，拆分为 %d + %d 重试", size, half, size - half)
+    left = _translate_with_fallback(batch[:half], source_lang, target_lang, api_key)
+    right = _translate_with_fallback(batch[half:], source_lang, target_lang, api_key)
+    return left + right
 
 
 def _translate_batch(batch: List[str], source_lang: str, target_lang: str, api_key: str) -> List[str]:
@@ -227,9 +251,19 @@ def translate_srt(
 
 if __name__ == "__main__":
     # 独立测试入口：python -m src.core.translator <srt> [task_id] [target_lang] [mode]
+    import os
     import sys
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+    # 加载项目根 .env（settings 导入时已读过环境变量，这里取 key 显式传入）
+    _env = Path(__file__).resolve().parents[2] / ".env"
+    if _env.exists():
+        for _line in _env.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _, _v = _line.partition("=")
+                os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
 
     if len(sys.argv) < 2:
         print("用法: python -m src.core.translator <srt_path> [task_id] [target_lang] [mode]")
@@ -239,9 +273,10 @@ if __name__ == "__main__":
     task = sys.argv[2] if len(sys.argv) > 2 else "manual_test"
     target = sys.argv[3] if len(sys.argv) > 3 else "zh-CN"
     m = sys.argv[4] if len(sys.argv) > 4 else "mono"
+    api_key = os.getenv("SUBTRANS_DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
 
     def _p(p: TranslateProgress) -> None:
         print(f"\r翻译中 {p.percent:5.1f}% ({p.done}/{p.total})", end="", flush=True)
 
-    res = translate_srt(srt, task, "auto", target, mode=m, on_progress=_p)
+    res = translate_srt(srt, task, "auto", target, mode=m, on_progress=_p, api_key=api_key)
     print(f"\n翻译完成: {res.srt_path}（{res.count} 条，双语={res.bilingual}）")

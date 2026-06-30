@@ -1,0 +1,163 @@
+"""④ 翻译 单测。mock DeepSeek 的 _call_deepseek，不依赖网络 / httpx。"""
+
+from __future__ import annotations
+
+import json
+import re
+from types import SimpleNamespace
+
+import pytest
+
+from src.core import translator
+from src.core.srt_utils import Subtitle, parse_srt, write_srt
+from src.core.translator import (
+    TranslateError,
+    translate_srt,
+    translate_texts,
+    _parse_translation_response,
+)
+
+
+@pytest.fixture
+def fake_settings(monkeypatch):
+    s = SimpleNamespace(
+        deepseek_api_key="test-key",
+        deepseek_base_url="https://api.deepseek.com",
+        deepseek_model="deepseek-chat",
+        translate_batch_size=2,
+        translate_timeout=10,
+    )
+    monkeypatch.setattr(translator, "settings", s)
+    return s
+
+
+def _echo_call(messages, **kwargs):
+    """假的 DeepSeek：从用户消息里抽出编号行，按数量返回 JSON 数组。"""
+    user = messages[-1]["content"]
+    items = re.findall(r"^\d+\.\s*(.*)$", user, re.M)
+    return json.dumps([f"T-{x}" for x in items])
+
+
+# ---------- _parse_translation_response ----------
+
+def test_parse_plain_json_array():
+    assert _parse_translation_response('["a", "b"]', 2) == ["a", "b"]
+
+
+def test_parse_code_fenced_json():
+    content = "```json\n[\"x\", \"y\"]\n```"
+    assert _parse_translation_response(content, 2) == ["x", "y"]
+
+
+def test_parse_numbered_fallback():
+    content = "1. first\n2. second"
+    assert _parse_translation_response(content, 2) == ["first", "second"]
+
+
+# ---------- translate_texts ----------
+
+def test_translate_texts_batches(fake_settings, monkeypatch):
+    monkeypatch.setattr(translator, "_call_deepseek", _echo_call)
+    seen = []
+    out = translate_texts(
+        ["a", "b", "c"], "auto", "zh-CN",
+        on_batch=lambda done, total: seen.append((done, total)),
+    )
+    assert out == ["T-a", "T-b", "T-c"]
+    # batch_size=2 -> 两批：(2,3) 和 (3,3)
+    assert seen == [(2, 3), (3, 3)]
+
+
+def test_translate_texts_empty():
+    assert translate_texts([], "auto", "zh-CN") == []
+
+
+def test_translate_texts_missing_key(monkeypatch):
+    monkeypatch.setattr(
+        translator, "settings",
+        SimpleNamespace(deepseek_api_key=None, translate_batch_size=2),
+    )
+    with pytest.raises(TranslateError, match="API Key"):
+        translate_texts(["a"], "auto", "zh-CN")
+
+
+def test_translate_texts_retry_on_mismatch_then_fail(fake_settings, monkeypatch):
+    """数量不匹配时自动减半重试；即使单条也失败时才抛错。"""
+    monkeypatch.setattr(translator, "_call_deepseek", lambda *a, **k: json.dumps([]))
+    with pytest.raises(TranslateError, match="单条"):
+        translate_texts(["a", "b"], "auto", "zh-CN")
+
+
+def test_translate_texts_retry_succeeds_after_halving(fake_settings, monkeypatch):
+    """批量2失败但单条成功时，应自动减半并合并结果。"""
+    called_batches = []
+
+    def fake(messages, **kw):
+        # 从 user message 里数编号
+        user = messages[1]["content"]
+        count = len([ln for ln in user.splitlines() if ln.strip() and ln[0].isdigit()])
+        called_batches.append(count)
+        if count == 2:
+            return json.dumps(["only-one"])  # 不够
+        return json.dumps(["ok"] * count)
+
+    monkeypatch.setattr(translator, "_call_deepseek", fake)
+    result = translate_texts(["a", "b"], "auto", "zh-CN")
+    assert result == ["ok", "ok"]
+    assert called_batches == [2, 1, 1]  # 失败后拆成两个单条
+
+
+# ---------- translate_srt ----------
+
+def _make_srt(tmp_path):
+    p = tmp_path / "original.srt"
+    write_srt(
+        [Subtitle(1, 0.0, 1.0, "hello"), Subtitle(2, 1.0, 2.0, "world")],
+        p,
+    )
+    return p
+
+
+@pytest.fixture
+def out_dir(tmp_path, monkeypatch):
+    d = tmp_path / "out"
+    monkeypatch.setattr(translator, "ensure_task_dir", lambda task_id: (d.mkdir(exist_ok=True) or d))
+    return d
+
+
+def test_translate_srt_mono(tmp_path, out_dir, monkeypatch):
+    src = _make_srt(tmp_path)
+    monkeypatch.setattr(translator, "translate_texts", lambda texts, s, t, **k: [f"译:{x}" for x in texts])
+
+    res = translate_srt(src, "task1", "auto", "zh-CN", mode="mono")
+
+    assert res.count == 2
+    assert res.bilingual is False
+    subs = parse_srt(res.srt_path)
+    assert subs[0].text == "译:hello"
+    # 时间轴保持不变
+    assert subs[0].start == 0.0 and subs[1].end == 2.0
+
+
+def test_translate_srt_bilingual(tmp_path, out_dir, monkeypatch):
+    src = _make_srt(tmp_path)
+    monkeypatch.setattr(translator, "translate_texts", lambda texts, s, t, **k: [f"译:{x}" for x in texts])
+
+    res = translate_srt(src, "task1", "auto", "zh-CN", mode="bilingual")
+
+    assert res.bilingual is True
+    subs = parse_srt(res.srt_path)
+    assert subs[0].text == "hello\n译:hello"
+
+
+def test_translate_srt_missing_input(tmp_path):
+    with pytest.raises(TranslateError, match="不存在"):
+        translate_srt(tmp_path / "nope.srt", "task1", "auto", "zh-CN")
+
+
+def test_translate_srt_empty(tmp_path, out_dir):
+    p = tmp_path / "original.srt"
+    p.write_text("", encoding="utf-8")
+    res = translate_srt(p, "task1", "auto", "zh-CN")
+    assert res.count == 0
+    assert res.srt_path.exists()

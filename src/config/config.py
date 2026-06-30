@@ -11,8 +11,32 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-# backend/ 目录（本文件位于 backend/app/config/config.py，向上三级）
+# 项目根目录（本文件位于 src/config/config.py，向上两级）
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+
+def _bootstrap_env() -> None:
+    """在读取任何环境变量前，先把项目根 .env 加载进来。
+
+    必须在 class Settings 定义之前调用：dataclass 的字段默认值
+    （os.getenv(...)）是在类定义期求值的。这样 uvicorn / pytest / CLI
+    各入口都能拿到 .env 里的 key，无需各自再 load。
+    setdefault 语义：不覆盖外部已设置的环境变量。
+    """
+    env_path = _BACKEND_DIR / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip().strip('"').strip("'")
+        if key and val:
+            os.environ.setdefault(key, val)
+
+
+_bootstrap_env()
 
 
 def _env_path(key: str, default: Path) -> Path:
@@ -32,6 +56,12 @@ class Settings:
 
     # 所有任务产物的根目录，按 data/{task_id}/ 组织
     data_dir: Path = _env_path("SUBTRANS_DATA_DIR", _BACKEND_DIR / "data")
+
+    # SQLite 任务库文件
+    db_path: Path = _env_path("SUBTRANS_DB", _BACKEND_DIR / "app.db")
+
+    # 后台流水线并发数（方案 A：线程池）
+    pipeline_workers: int = int(os.getenv("SUBTRANS_WORKERS", "2"))
 
     # yt-dlp 格式选择：优先最佳视频+音频，回退到单一最佳流
     download_format: str = os.getenv("SUBTRANS_DL_FORMAT", "bv*+ba/b")
@@ -53,14 +83,16 @@ class Settings:
     audio_sample_rate: int = int(os.getenv("SUBTRANS_AUDIO_SR", "16000"))
     audio_channels: int = int(os.getenv("SUBTRANS_AUDIO_CH", "1"))
 
-    # --- ③ 语音识别（faster-whisper）---
-    whisper_model: str = os.getenv("SUBTRANS_WHISPER_MODEL", "small")
-    # device: auto / cpu（Apple Silicon 下 CTranslate2 走 CPU）
-    whisper_device: str = os.getenv("SUBTRANS_WHISPER_DEVICE", "auto")
-    # compute_type: int8 体积小速度快；float32 更准更慢
-    whisper_compute_type: str = os.getenv("SUBTRANS_WHISPER_COMPUTE", "int8")
-    # 模型缓存目录（None = faster-whisper 默认 ~/.cache）
-    whisper_download_root: Optional[Path] = _opt_env_path("SUBTRANS_WHISPER_DIR")
+    # --- ③ 语音识别（Replicate-hosted Whisper）---
+    # Replicate 模型标识（版本锁定）
+    replicate_whisper_model: str = os.getenv(
+        "SUBTRANS_WHISPER_MODEL",
+        "stayallive/whisper-subtitles:b97ba81004e7132181864c885a76cae0e56bc61caa4190a395f6d8ba45b7a969",
+    )
+    # Replicate 推理超时（含冷启动，最长可能几分钟）
+    replicate_timeout: int = int(os.getenv("SUBTRANS_REPLICATE_TIMEOUT", "1800"))
+    # Replicate 超时/网络错误的重试次数（冷启动常见）
+    replicate_retries: int = int(os.getenv("SUBTRANS_REPLICATE_RETRIES", "3"))
 
     # --- ④ 翻译（DeepSeek，OpenAI 兼容接口）---
     deepseek_api_key: Optional[str] = (
@@ -68,8 +100,8 @@ class Settings:
     )
     deepseek_base_url: str = os.getenv("SUBTRANS_DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     deepseek_model: str = os.getenv("SUBTRANS_DEEPSEEK_MODEL", "deepseek-chat")
-    # 每批翻译多少条字幕
-    translate_batch_size: int = int(os.getenv("SUBTRANS_TRANSLATE_BATCH", "20"))
+    # 每批翻译多少条字幕（太长模型可能截断 JSON，自动减半重试）
+    translate_batch_size: int = int(os.getenv("SUBTRANS_TRANSLATE_BATCH", "8"))
     translate_timeout: int = int(os.getenv("SUBTRANS_TRANSLATE_TIMEOUT", "60"))
 
 

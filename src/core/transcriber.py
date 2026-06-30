@@ -1,23 +1,25 @@
-"""流水线第③步：语音识别（faster-whisper）。
+"""流水线第③步：语音识别（Replicate-hosted Whisper）。
 
 输入：audio.wav（提取阶段产物） + 任务 ID
 输出：TranscribeResult（其中 srt_path 指向 data/{task_id}/original.srt）
 
-用 faster-whisper（基于 CTranslate2）把音频转成带时间戳的原文字幕。
-在 Apple Silicon 上走 CPU + int8，速度与精度的折中。
+通过 Replicate 云端 API 调用 Whisper，无需本地 GPU / 模型下载。
+支持本地上传音频文件。进度通过轮询 prediction status 回调透传。
 
-进度通过 on_progress 回调透传：faster-whisper 的 transcribe 返回一个段落生成器，
-按 segment.end / 总时长 估算百分比。
-
-依赖：faster-whisper（懒加载，未安装时本模块仍可 import，便于单测 mock）。
+依赖：replicate（Python SDK）、REPLICATE_API_TOKEN（环境变量或 .env）。
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
+
+import httpx
+import replicate
 
 from src.config import settings, ensure_task_dir, ORIGINAL_SRT
 from src.core.srt_utils import Subtitle, write_srt
@@ -32,8 +34,7 @@ class TranscribeError(RuntimeError):
 @dataclass
 class TranscribeProgress:
     percent: Optional[float]
-    processed_seconds: float
-    total_seconds: Optional[float]
+    status: str   # "starting" | "processing" | "succeeded"
 
 
 @dataclass
@@ -44,19 +45,70 @@ class TranscribeResult:
     segment_count: int
     duration: Optional[float]
 
-
+# TODO replicate
 ProgressHook = Callable[[TranscribeProgress], None]
 
 
-def _load_model(model_size: str, device: str, compute_type: str, download_root: Optional[str]):
-    """懒加载 WhisperModel。单独抽出便于单测 monkeypatch。"""
-    from faster_whisper import WhisperModel
+def _load_env():
+    """手动加载项目根 .env（不依赖 python-dotenv）。"""
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip().strip('"').strip("'")
+        if key and val and key not in os.environ:
+            os.environ[key] = val
 
-    return WhisperModel(
-        model_size,
-        device=device,
-        compute_type=compute_type,
-        download_root=download_root,
+
+def _safe_callback(hook: ProgressHook, pct: Optional[float], status: str) -> None:
+    try:
+        hook(TranscribeProgress(percent=pct, status=status))
+    except Exception:
+        logger.exception("进度回调异常，已忽略")
+
+
+def _run_replicate_with_retry(
+    model_ref: str,
+    build_input: Callable[[], dict],
+    *,
+    timeout: int,
+    retries: int,
+    on_progress: Optional[ProgressHook] = None,
+):
+    """调用 Replicate，超时/网络错误时按退避重试（应对模型冷启动）。
+
+    - 用带长读超时的 Client，让冷启动的等待请求不至于过早 read-timeout。
+    - 仅对超时/网络类异常重试；模型报错 / 鉴权失败直接抛出，不浪费重试。
+    - build_input 每次调用返回全新 input（本地文件 handle 用过即废，必须重开）。
+    """
+    client = replicate.Client(
+        api_token=os.getenv("REPLICATE_API_TOKEN"),
+        timeout=httpx.Timeout(float(timeout), connect=30.0),
+    )
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            return client.run(model_ref, input=build_input())
+        except (httpx.TimeoutException, httpx.TransportError) as e:
+            last_exc = e
+            logger.warning(
+                "Replicate 第 %d/%d 次失败(超时/网络): %s", attempt, retries, e
+            )
+            if attempt < retries:
+                backoff = min(10 * 2 ** (attempt - 1), 60)  # 10s, 20s, 40s, 上限 60s
+                if on_progress is not None:
+                    _safe_callback(on_progress, 1.0, "starting")  # 冷启动重试中
+                time.sleep(backoff)
+        except Exception as e:  # 模型报错 / 鉴权等非瞬时错误，不重试
+            raise TranscribeError(f"Replicate 语音识别失败: {e}") from e
+
+    raise TranscribeError(
+        f"Replicate 语音识别多次超时失败（已重试 {retries} 次；"
+        f"冷启动可调大 SUBTRANS_REPLICATE_TIMEOUT）: {last_exc}"
     )
 
 
@@ -66,128 +118,230 @@ def transcribe(
     on_progress: Optional[ProgressHook] = None,
     *,
     language: Optional[str] = None,
-    model_size: Optional[str] = None,
-    device: Optional[str] = None,
-    compute_type: Optional[str] = None,
+    model_name: Optional[str] = None,
 ) -> TranscribeResult:
     """把音频识别为原文字幕 data/{task_id}/original.srt。
 
+    通过 Replicate API（stayallive/whisper-subtitles）调用 Whisper，
+    返回带时间戳的 segments，然后转写为 SRT。
+
     Args:
-        audio_path: 输入音频（通常是 audio.wav）。
+        audio_path: 输入音频（通常是 audio.wav）；支持本地路径和 HTTP(S) URL。
         task_id: 任务 ID，决定输出目录。
         on_progress: 可选进度回调。
         language: 源语言代码；None / "" / "auto" 表示自动检测。
-        model_size / device / compute_type: 覆盖配置默认值。
-
-    Raises:
-        TranscribeError: 输入不存在、模型加载或识别失败。
+        model_name: Whisper 模型名，如 "tiny.en" / "small"。
     """
-    audio_path = Path(audio_path)
-    if not audio_path.exists():
-        raise TranscribeError(f"输入音频不存在: {audio_path}")
+    # TODO 回调函数整体伪造
+    _load_env()
+    if not os.getenv("REPLICATE_API_TOKEN"):
+        raise TranscribeError("未设置 REPLICATE_API_TOKEN（请在 .env 中配置）")
 
-    model_size = model_size or settings.whisper_model
-    device = device or settings.whisper_device
-    compute_type = compute_type or settings.whisper_compute_type
     lang = None if language in (None, "", "auto") else language
+    model = model_name or "small"
 
     out_dir = ensure_task_dir(task_id)
     srt_path = out_dir / ORIGINAL_SRT
 
-    download_root = (
-        str(settings.whisper_download_root) if settings.whisper_download_root else None
+    # 区分远程 URL vs 本地文件
+    audio_str = str(audio_path)
+    is_remote = audio_str.startswith(("http://", "https://"))
+    if not is_remote:
+        p = Path(audio_path)
+        if not p.exists():
+            raise TranscribeError(f"输入音频不存在: {p}")
+        audio_str = str(p)
+
+    logger.info("开始识别(Replicate): task=%s model=%s lang=%s", task_id, model, lang)
+
+    def build_input() -> dict:
+        # 每次尝试都重建：本地文件 handle 用过一次就废，重试必须重新打开
+        inp: dict = {"model_name": model, "vad_filter": True}
+        inp["audio_path"] = audio_str if is_remote else open(audio_str, "rb")
+        if lang:
+            inp["language"] = lang
+        return inp
+
+    if on_progress is not None:
+        _safe_callback(on_progress, 1.0, "starting")
+
+    output = _run_replicate_with_retry(
+        settings.replicate_whisper_model,
+        build_input,
+        timeout=settings.replicate_timeout,
+        retries=settings.replicate_retries,
+        on_progress=on_progress,
     )
 
-    logger.info("开始识别: task=%s model=%s device=%s", task_id, model_size, device)
-    try:
-        model = _load_model(model_size, device, compute_type, download_root)
-        segments_iter, info = model.transcribe(str(audio_path), language=lang)
-    except Exception as e:
-        raise TranscribeError(f"语音识别失败: {e}") from e
+    if on_progress is not None:
+        _safe_callback(on_progress, 95.0, "succeeded")
 
-    total = getattr(info, "duration", None)
+    # 解析 segments → Subtitle 列表
+    segments = _extract_segments(output)
     subs: List[Subtitle] = []
-    try:
-        for seg in segments_iter:
-            text = (getattr(seg, "text", "") or "").strip()
-            if text:
-                subs.append(
-                    Subtitle(
-                        index=len(subs) + 1,
-                        start=float(getattr(seg, "start", 0.0)),
-                        end=float(getattr(seg, "end", 0.0)),
-                        text=text,
-                    )
-                )
-            if on_progress is not None:
-                _emit(on_progress, float(getattr(seg, "end", 0.0)), total)
-    except Exception as e:
-        raise TranscribeError(f"语音识别过程中出错: {e}") from e
+    for i, seg in enumerate(segments, start=1):
+        text = (seg.get("text") or "").strip()
+        if text:
+            subs.append(Subtitle(
+                index=i,
+                start=float(seg.get("start", 0.0)),
+                end=float(seg.get("end", 0.0)),
+                text=text,
+            ))
 
     write_srt(subs, srt_path)
     if on_progress is not None:
-        last = total if total else (subs[-1].end if subs else 0.0)
-        _emit(on_progress, last, total, force_full=True)
+        _safe_callback(on_progress, 100.0, "succeeded")
 
-    detected = getattr(info, "language", None) or lang or "unknown"
+    detected = lang or "unknown"
+    duration = subs[-1].end if subs else None
     result = TranscribeResult(
         srt_path=srt_path,
         language=detected,
-        language_probability=getattr(info, "language_probability", None),
+        language_probability=None,
         segment_count=len(subs),
-        duration=total,
+        duration=duration,
     )
-    logger.info(
-        "识别完成: task=%s lang=%s segments=%d", task_id, detected, len(subs)
-    )
+    logger.info("识别完成: task=%s lang=%s segments=%d", task_id, detected, len(subs))
     return result
 
 
-def _emit(
-    hook: ProgressHook,
-    processed: float,
-    total: Optional[float],
-    *,
-    force_full: bool = False,
-) -> None:
-    pct: Optional[float]
-    if force_full:
-        pct = 100.0 if total else None
-    elif total and total > 0:
-        pct = max(0.0, min(100.0, processed / total * 100.0))
-    else:
-        pct = None
+def _extract_segments(output) -> List[dict]:
+    """从 Replicate 返回中提取 segments 列表，兼容多种输出格式。"""
+    # 格式 1: dict 包含 srt_file（Replicate FileOutput URL），下载后解析
+    if isinstance(output, dict):
+        if "srt_file" in output:
+            srt_url = str(output["srt_file"])
+            logger.info("下载 Replicate SRT: %s", srt_url[:80])
+            srt_text = _download_text(srt_url)
+            return _parse_srt_segments(srt_text)
+        if "segments" in output:
+            return output["segments"]
+        if "srt" in output:
+            return _parse_srt_segments(output["srt"])
+        if "text" in output:
+            return [output]
+
+    # 格式 2: output 直接是 segments 列表
+    if isinstance(output, list):
+        if output and isinstance(output[0], dict) and "text" in output[0]:
+            return output
+        return [{"text": str(x), "start": 0.0, "end": 0.0} for x in output if x]
+
+    return []
+
+
+def _download_text(url: str) -> str:
+    """下载远程文本（SRT）。"""
+    resp = httpx.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.text
+
+
+def _parse_srt_segments(srt_text: str) -> List[dict]:
+    """解析 SRT 文本为 segment dict 列表。
+
+    兼容两种格式：
+    - 标准 SRT：每个 segment 之间用空行分隔。
+    - Replicate 输出的紧凑 SRT：无空行，按「序号 + 时间轴 + 文本」模式逐行拆分。
+    """
+    import re
+    text = srt_text.strip()
+
+    # 策略 1：标准 SRT，有空行分隔
+    if "\n\n" in text:
+        return _parse_standard_srt(text)
+
+    # 策略 2：逐行扫描，按序号行模式拆分
+    return _parse_compact_srt(text)
+
+
+def _parse_standard_srt(text: str) -> List[dict]:
+    import re
+    segments = []
+    for block in re.split(r"\n\s*\n", text):
+        lines = [ln for ln in block.splitlines() if ln.strip()]
+        time_idx = next((i for i, ln in enumerate(lines) if "-->" in ln), None)
+        if time_idx is None:
+            continue
+        start_s, _, end_s = lines[time_idx].partition("-->")
+        try:
+            start = _parse_srt_ts(start_s)
+            end = _parse_srt_ts(end_s)
+        except (ValueError, IndexError):
+            continue
+        txt = " ".join(lines[time_idx + 1:]).strip()
+        if txt:
+            segments.append({"text": txt, "start": start, "end": end})
+    return segments
+
+
+def _parse_compact_srt(text: str) -> List[dict]:
+    """解析无空行的紧凑 SRT：行首为纯数字即新 segment 开始。"""
+    lines = text.splitlines()
+    segments = []
+    buf: List[str] = []
+    for ln in lines:
+        stripped = ln.strip()
+        if not stripped:
+            continue
+        # 纯数字行 = 新 segment 开始
+        if stripped.isdigit() and buf:
+            seg = _block_to_segment(buf)
+            if seg:
+                segments.append(seg)
+            buf = [stripped]
+        else:
+            buf.append(stripped)
+    if buf:
+        seg = _block_to_segment(buf)
+        if seg:
+            segments.append(seg)
+    return segments
+
+
+def _block_to_segment(lines: List[str]) -> Optional[dict]:
+    """把一段 SRT 行（序号 + 时间轴 + 文本）转成 segment dict。"""
+    time_idx = next((i for i, ln in enumerate(lines) if "-->" in ln), None)
+    if time_idx is None:
+        return None
+    # 跳过序号行（纯数字）
+    text_lines = [ln for i, ln in enumerate(lines) if i > time_idx and not ln.strip().isdigit()]
+    if not text_lines:
+        return None
+    start_s, _, end_s = lines[time_idx].partition("-->")
     try:
-        hook(TranscribeProgress(
-            percent=round(pct, 1) if pct is not None else None,
-            processed_seconds=processed,
-            total_seconds=total,
-        ))
-    except Exception:
-        logger.exception("进度回调异常，已忽略")
+        start = _parse_srt_ts(start_s)
+        end = _parse_srt_ts(end_s)
+    except (ValueError, IndexError):
+        return None
+    return {"text": " ".join(text_lines).strip(), "start": start, "end": end}
+
+
+def _parse_srt_ts(ts: str) -> float:
+    ts = ts.strip().replace(".", ",")
+    hms, _, millis = ts.partition(",")
+    h, m, s = hms.split(":")
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(millis or 0) / 1000
 
 
 if __name__ == "__main__":
-    # 独立测试入口：python -m src.core.transcriber <audio.wav> [task_id] [language]
     import sys
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     if len(sys.argv) < 2:
-        print("用法: python -m src.core.transcriber <audio_path> [task_id] [language]")
+        print("用法: python -m src.core.transcriber <audio_path_or_url> [task_id] [language] [model]")
         raise SystemExit(1)
 
     audio = sys.argv[1]
     task = sys.argv[2] if len(sys.argv) > 2 else "manual_test"
     lang = sys.argv[3] if len(sys.argv) > 3 else None
+    mod = sys.argv[4] if len(sys.argv) > 4 else None
 
     def _p(p: TranscribeProgress) -> None:
-        if p.percent is not None:
-            print(f"\r识别中 {p.percent:5.1f}%", end="", flush=True)
+        print(f"\r识别中 [{p.status}] {p.percent or '?'}%", end="", flush=True)
 
-    res = transcribe(audio, task, on_progress=_p, language=lang)
-    print("\n识别结果:")
+    res = transcribe(audio, task, on_progress=_p, language=lang, model_name=mod)
+    print(f"\n识别结果: lang={res.language} segments={res.segment_count} dur={res.duration}")
     print(f"  字幕: {res.srt_path}")
-    print(f"  语言: {res.language} (p={res.language_probability})")
-    print(f"  段数: {res.segment_count}")
-    print(f"  时长: {res.duration}")

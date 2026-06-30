@@ -1,0 +1,34 @@
+"""FastAPI 应用装配：创建 app、配置 CORS、挂载各业务路由。
+
+启动：
+    uv run uvicorn src.handler.app:app --reload --port 8000
+    文档： http://localhost:8000/docs
+"""
+
+from __future__ import annotations
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from src.handler import health, tasks
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="字幕翻译工作台 API", version="0.1.0")
+
+    # 本机开发：放开跨域，前端可从任意端口访问
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # 按业务挂载路由，后续新增业务在此 include 即可
+    app.include_router(tasks.router)
+    app.include_router(health.router)
+    # TODO  LOAD_ENV \
+    return app
+
+
+app = create_app()

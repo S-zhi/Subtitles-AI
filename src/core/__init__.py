@@ -15,16 +15,38 @@ from .audio_extractor import (
     AudioResult,
     extract_audio,
 )
+from .srt_utils import Subtitle, format_timestamp, parse_srt, parse_timestamp, write_srt
+from .transcriber import (
+    TranscribeError,
+    TranscribeProgress,
+    TranscribeResult,
+    transcribe,
+)
+from .translator import (
+    TranslateError,
+    TranslateProgress,
+    TranslateResult,
+    translate_srt,
+    translate_texts,
+)
+from .subtitle_burner import (
+    BurnError,
+    BurnProgress,
+    BurnResult,
+    burn_subtitles,
+)
 
 __all__ = [
     # ① 下载
-    "download_video",
-    "DownloadResult",
-    "DownloadProgress",
-    "DownloadError",
+    "download_video", "DownloadResult", "DownloadProgress", "DownloadError",
     # ② 提取音频
-    "extract_audio",
-    "AudioResult",
-    "AudioProgress",
-    "AudioExtractError",
+    "extract_audio", "AudioResult", "AudioProgress", "AudioExtractError",
+    # SRT 工具
+    "Subtitle", "format_timestamp", "parse_timestamp", "write_srt", "parse_srt",
+    # ③ 语音识别
+    "transcribe", "TranscribeResult", "TranscribeProgress", "TranscribeError",
+    # ④ 翻译
+    "translate_srt", "translate_texts", "TranslateResult", "TranslateProgress", "TranslateError",
+    # ⑤ 烧录
+    "burn_subtitles", "BurnResult", "BurnProgress", "BurnError",
 ]

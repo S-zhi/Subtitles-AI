@@ -5,7 +5,7 @@ window.APP_CONFIG = {
 
   // true  = 纯前端 mock，自动模拟整条流水线进度，无需后端
   // false = 走真实 REST + SSE 接口
-  USE_MOCK: true,
+  USE_MOCK: false,
 
   // 请求超时（毫秒）
   API_TIMEOUT_MS: 15000,

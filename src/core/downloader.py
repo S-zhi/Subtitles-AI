@@ -53,10 +53,10 @@ class DownloadResult:
     height: Optional[int]
     source_url: str
 
-
+# 视频下载回调函数 回调函数逻辑 提供修改进度的展示函数 -> 放入执行流程中的hook内
 ProgressHook = Callable[[DownloadProgress], None]
 
-
+# 对钩子函数进行封装
 def _make_progress_adapter(on_progress: ProgressHook):
     """把 yt-dlp 的 hook 字典转换成统一的 DownloadProgress 回调。"""
 
@@ -87,7 +87,7 @@ def _make_progress_adapter(on_progress: ProgressHook):
                 )
             )
         except Exception:  # 回调里的异常不应中断下载
-            logger.exception("进度回调异常，已忽略")
+            logger.exception("下载进度回调异常，已忽略")
 
     return hook
 

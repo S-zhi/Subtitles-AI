@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 class AudioExtractError(RuntimeError):
-    """提取音频阶段失败。"""
+    """提取音频阶段失败统一封装错误"""
 
 
 @dataclass
@@ -60,7 +60,7 @@ def extract_audio(
     channels: Optional[int] = None,
 ) -> AudioResult:
     """从视频提取音频到 data/{task_id}/audio.wav。
-
+    可以共用
     Args:
         video_path: 输入视频路径（通常是下载阶段的 source.mp4）。
         task_id: 任务 ID，决定输出目录。
@@ -76,9 +76,11 @@ def extract_audio(
     """
     video_path = Path(video_path)
     if not video_path.exists():
+        logger.error(f"输入视频不存在: {video_path}")
         raise AudioExtractError(f"输入视频不存在: {video_path}")
 
     if not _has_audio_stream(video_path):
+        logger.error(f"源视频不包含音频流，无法提取音频: {video_path}")
         raise AudioExtractError("源视频不包含音频流，无法提取音频")
 
     sr = sample_rate or settings.audio_sample_rate
@@ -142,7 +144,7 @@ def _run_ffmpeg(
         )
     except FileNotFoundError as e:
         raise AudioExtractError(
-            f"找不到 ffmpeg（{cmd[0]}）。请安装 ffmpeg 或设置 SUBTRANS_FFMPEG。"
+            f"找不到 ffmpeg（{cmd[0]}）。请安装 ffmpeg-full 或设置 SUBTRANS_FFMPEG。 MAC用户请使用  brew install ffmpeg-full,请注意不要下载 ffmpeg，ffmpeg-full 是 ffmpeg 的完整版本，仅下载ffmpeg可能会导致字幕无法烧录到视频"
         ) from e
 
     assert proc.stdout is not None
@@ -243,29 +245,3 @@ def _safe_filesize(path: Path) -> Optional[int]:
         return None
 
 
-if __name__ == "__main__":
-    # 独立测试入口：python -m src.core.audio_extractor <video_path> [task_id]
-    import sys
-
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-
-    if len(sys.argv) < 2:
-        print("用法: python -m src.core.audio_extractor <video_path> [task_id]")
-        raise SystemExit(1)
-
-    in_path = sys.argv[1]
-    test_task = sys.argv[2] if len(sys.argv) > 2 else "manual_test"
-
-    def _print_progress(p: AudioProgress) -> None:
-        if p.percent is not None:
-            print(f"\r提取中 {p.percent:5.1f}%  ({p.processed_seconds:.1f}s)", end="", flush=True)
-        else:
-            print(f"\r提取中 {p.processed_seconds:.1f}s", end="", flush=True)
-
-    res = extract_audio(in_path, test_task, on_progress=_print_progress)
-    print("\n提取结果:")
-    print(f"  文件: {res.audio_path}")
-    print(f"  采样率: {res.sample_rate} Hz")
-    print(f"  声道: {res.channels}")
-    print(f"  时长: {res.duration} 秒")
-    print(f"  大小: {(res.filesize or 0) / 1024 / 1024:.2f} MB")
