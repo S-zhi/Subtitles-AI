@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.handler import health, tasks
+from src.handler import health, srt, tasks
 
 
 def create_app() -> FastAPI:
@@ -26,6 +26,7 @@ def create_app() -> FastAPI:
 
     # 按业务挂载路由，后续新增业务在此 include 即可
     app.include_router(tasks.router)
+    app.include_router(srt.router)
     app.include_router(health.router)
     # TODO  LOAD_ENV \
     return app

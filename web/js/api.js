@@ -25,6 +25,20 @@ const RealApi = {
     return res.json();
   },
 
+  // 获取源视频语言选项。
+  async listVideoLanguages() {
+    const res = await fetch(`${this.base}/api/srt/languages`);
+    if (!res.ok) throw new Error("获取源语言失败：" + res.status);
+    return res.json();
+  },
+
+  // 获取 Whisper 模型权重选项。
+  async listModelWeights() {
+    const res = await fetch(`${this.base}/api/srt/model-weights`);
+    if (!res.ok) throw new Error("获取模型列表失败：" + res.status);
+    return res.json();
+  },
+
   async deleteTask(id) {
     const res = await fetch(`${this.base}/api/tasks/${id}`, { method: "DELETE" });
     if (!res.ok) throw new Error("删除失败：" + res.status);
@@ -34,6 +48,12 @@ const RealApi = {
     const res = await fetch(`${this.base}/api/tasks/${id}/retry`, { method: "POST" });
     if (!res.ok) throw new Error("重试失败：" + res.status);
     return res.json();
+  },
+
+  // 请求后端打开任务所在的本地文件夹。
+  async openFolder(id) {
+    const res = await fetch(`${this.base}/api/tasks/${id}/folder`, { method: "POST" });
+    if (!res.ok) throw new Error("打开文件夹失败：" + res.status);
   },
 
   // SSE 订阅单任务进度，返回取消函数
@@ -109,12 +129,18 @@ const MockApi = (() => {
       tasks.unshift(t); persist(); await delay(150); return { ...t };
     },
     async listTasks() { await delay(300); return tasks.map((t) => ({ ...t })); },
+    // 示例模式下返回常用源语言选项。
+    async listVideoLanguages() { await delay(80); return ["en", "zh", "de", "es", "ru", "ko", "fr", "ja"]; },
+    // 示例模式下返回 Replicate Whisper 模型权重选项。
+    async listModelWeights() { await delay(80); return ["tiny.en", "tiny", "base.en", "base", "small.en", "small", "medium.en", "medium", "large-v1", "large-v2"]; },
     async deleteTask(id) { tasks = tasks.filter((t) => t.id !== id); persist(); await delay(80); },
     async retryTask(id) {
       const t = find(id);
       if (t) { t.status = "PENDING"; t.progress = 0; t.error = null; t._sim = true; persist(); }
       return { ...t };
     },
+    // 示例模式下模拟打开任务文件夹。
+    async openFolder() { await delay(80); },
     subscribeProgress(id, onUpdate) {
       const t = find(id);
       if (!t || !t._sim) return () => {};

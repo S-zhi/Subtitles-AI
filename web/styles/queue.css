@@ -55,6 +55,7 @@
   margin-top: 2px;
 }
 .qrow__meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.qrow__dyn { margin-top: 13px; }
 
 /* 进度 + 阶段轨道 */
 .qrow__progress { margin-top: 12px; }
@@ -93,7 +94,7 @@
 
 /* 失败提示（可操作） */
 .qrow__error {
-  margin-top: 12px; padding: 10px 12px;
+  padding: 10px 12px;
   background: var(--danger-soft); border-radius: var(--r-control);
   font-size: 12.5px; color: var(--danger-text);
 }

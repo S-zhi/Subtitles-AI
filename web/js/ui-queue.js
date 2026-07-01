@@ -194,6 +194,7 @@ function buildActions(t, cat) {
         setPreviewId(t.id);
         setView("preview");
       }),
+      iconBtn("ph-folder-open", "打开文件夹", "", () => openFolder(t)),
       iconBtn("ph-download-simple", "下载视频", "", () => download(t, "video")),
       iconBtn("ph-closed-captioning", "下载字幕", "", () => download(t, "subtitle")),
       iconBtn("ph-trash", "删除", "iconbtn--danger", () => remove(t)),
@@ -201,11 +202,15 @@ function buildActions(t, cat) {
   }
   if (cat === "failed") {
     return [
+      iconBtn("ph-folder-open", "打开文件夹", "", () => openFolder(t)),
       iconBtn("ph-arrow-clockwise", "重试", "iconbtn--accent", () => retry(t)),
       iconBtn("ph-trash", "删除", "iconbtn--danger", () => remove(t)),
     ];
   }
-  return [iconBtn("ph-trash", "删除", "iconbtn--danger", () => remove(t))];
+  return [
+    iconBtn("ph-folder-open", "打开文件夹", "", () => openFolder(t)),
+    iconBtn("ph-trash", "删除", "iconbtn--danger", () => remove(t)),
+  ];
 }
 
 function iconBtn(icon, label, extra, onClick) {
@@ -224,6 +229,16 @@ function download(t, kind) {
     return;
   }
   window.open(Api.downloadUrl(t.id, kind), "_blank");
+}
+
+// 打开当前任务对应的本地产物文件夹。
+async function openFolder(t) {
+  try {
+    await Api.openFolder(t.id);
+    toast(USE_MOCK ? "示例模式：文件夹打开占位" : "已打开任务文件夹", "ph-folder-open");
+  } catch (e) {
+    toast(e.message || "打开文件夹失败", "ph-warning-circle");
+  }
 }
 
 async function retry(t) {
