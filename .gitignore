@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+*.db
+.env
+.claude
+.python-version
+error.log
+.idea
+logs
+app.db
+app.db-shm
+app.db-wal
+

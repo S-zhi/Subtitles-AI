@@ -88,13 +88,16 @@ function renderStage(sel) {
     stageTag(sel.burn === "hard" ? "硬字幕" : "软字幕")
   );
   const actions = el("div", "stage__actions");
+  const folder = el("button", "btn btn--ghost btn--sm");
+  folder.innerHTML = `<i class="ph ph-folder-open"></i><span>打开文件夹</span>`;
+  folder.addEventListener("click", () => openFolder(sel));
   const dlVideo = el("button", "btn btn--primary btn--sm");
   dlVideo.innerHTML = `<i class="ph ph-download-simple"></i><span>下载视频</span>`;
   dlVideo.addEventListener("click", () => open(sel, "video"));
   const dlSub = el("button", "btn btn--ghost btn--sm");
   dlSub.innerHTML = `<i class="ph ph-closed-captioning"></i><span>下载字幕</span>`;
   dlSub.addEventListener("click", () => open(sel, "subtitle"));
-  actions.append(dlVideo, dlSub);
+  actions.append(folder, dlVideo, dlSub);
 
   bar.append(title, tags, actions);
   stage.append(screen, bar);
@@ -107,6 +110,16 @@ function open(sel, kind) {
     return;
   }
   window.open(Api.downloadUrl(sel.id, kind), "_blank");
+}
+
+// 打开当前预览视频对应的本地产物文件夹。
+async function openFolder(sel) {
+  try {
+    await Api.openFolder(sel.id);
+    toast(USE_MOCK ? "示例模式：文件夹打开占位" : "已打开任务文件夹", "ph-folder-open");
+  } catch (e) {
+    toast(e.message || "打开文件夹失败", "ph-warning-circle");
+  }
 }
 
 function stageTag(text) {

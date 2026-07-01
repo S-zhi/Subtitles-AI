@@ -104,7 +104,25 @@ uv run python -m src.core.subtitle_burner   data/<task_id>/source.mp4 data/<task
 | `translated.srt` | ④ 译文字幕 |
 | `output.mp4` | ⑤ 成品（带字幕） |
 
-## 7. 测试
+## 7. 后端接口
+
+常用接口会显示在 FastAPI 文档里：`http://localhost:8000/docs`。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/tasks` | 创建任务并加入后台处理队列 |
+| `GET` | `/api/tasks` | 获取任务列表 |
+| `GET` | `/api/tasks/{task_id}` | 获取任务详情 |
+| `POST` | `/api/tasks/{task_id}/retry` | 重试任务 |
+| `DELETE` | `/api/tasks/{task_id}` | 删除任务及产物目录 |
+| `GET` | `/api/tasks/{task_id}/download` | 下载成品视频 |
+| `GET` | `/api/tasks/{task_id}/subtitle` | 下载译文字幕 |
+| `POST` | `/api/tasks/{task_id}/folder` | 打开当前任务所在的本地文件夹 |
+| `GET` | `/api/tasks/{task_id}/stream` | SSE 推送任务进度 |
+
+> `folder` 接口只适合本地工作台使用：浏览器不能直接打开本机目录，所以由本地后端代为调用系统文件管理器。
+
+## 8. 测试
 
 ```bash
 uv run pytest                # 全部单测（快，不联网）
