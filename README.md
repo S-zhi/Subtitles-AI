@@ -1,5 +1,15 @@
 # Subtitles AI · 字幕翻译工作台
 
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
+![uv](https://img.shields.io/badge/uv-managed-6340AC?logo=uv&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
+![Vanilla JS](https://img.shields.io/badge/frontend-Vanilla%20JS-F7DF1E?logo=javascript&logoColor=black)
+![Whisper via Replicate](https://img.shields.io/badge/ASR-Whisper%20on%20Replicate-000000?logo=replicate&logoColor=white)
+![DeepSeek](https://img.shields.io/badge/Translate-DeepSeek-4D6BFE)
+![FFmpeg](https://img.shields.io/badge/FFmpeg-libass-388E3C?logo=ffmpeg&logoColor=white)
+![pytest](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)
+
 本地视频字幕处理台(目前已经打通Phub)。输入一个视频 URL，自动跑完整条流水线：**① 下载 → ② 提取音频 → ③ 语音识别 → ④ 翻译 → ⑤ 烧录字幕**，产出带翻译字幕的成品视频和字幕文件。
 
 ![img_2.png](img_2.png)
