@@ -35,13 +35,13 @@ This project is designed for personal workflows that need semi-automated video s
 
 | Type | Support |
 | --- | --- |
-| Operating systems | macOS / Linux / Windows should work; the local folder opening endpoint handles platform differences |
+| Operating systems | Currently supported and verified on macOS only; Linux / Windows are not adapted yet |
 | Python | `>=3.10,<3.13`; the repository currently uses `3.11` in `.python-version` |
 | Package manager | uv |
 | Backend | FastAPI + Uvicorn |
 | Frontend | Vanilla HTML / CSS / JavaScript ES Modules |
 | Storage | SQLite with WAL mode |
-| Video processing | yt-dlp, ffmpeg, ffprobe; hard-burned subtitles require FFmpeg with libass |
+| Video processing | yt-dlp, ffmpeg-full, ffprobe; hard-burned subtitles require libass |
 | Cloud services | Replicate, DeepSeek |
 
 ### 1.4 Documentation Navigation
@@ -61,7 +61,26 @@ The repository currently does not include `AGENTS.md`, `CLAUDE.md`, or `.github/
 
 ## 2. Quick Start
 
-### 2.1 Install Dependencies
+### 2.1 Install System and Project Dependencies
+
+The project is currently adapted for macOS only. First install `uv` and `ffmpeg-full` with `libass` via Homebrew:
+
+```bash
+brew install uv
+brew tap homebrew-ffmpeg/ffmpeg
+brew install ffmpeg-full
+```
+
+Do not install regular `ffmpeg` as a replacement for `ffmpeg-full`. Regular `ffmpeg` may miss `libass`, which can make hard-burned subtitles fail with `No such filter: 'subtitles'` or an unavailable subtitle filter.
+
+Verify the system dependencies:
+
+```bash
+uv --version
+ffmpeg -hide_banner -filters | grep " subtitles "
+```
+
+Then install Python project dependencies:
 
 ```bash
 uv sync
@@ -369,7 +388,7 @@ The repository currently does not include a `LICENSE` file. Needs User Input: ad
 | Symptom | Resolution |
 | --- | --- |
 | `Replicate` request timeout | Increase `SUBTRANS_REPLICATE_TIMEOUT` or `SUBTRANS_REPLICATE_RETRIES`, and confirm network access to Replicate |
-| Hard-burn fails or the `subtitles` filter is missing | Install FFmpeg with libass support, or temporarily use `--burn soft` |
+| Hard-burn fails or the `subtitles` filter is missing | Install `ffmpeg-full` via Homebrew instead of regular `ffmpeg`, or temporarily use `--burn soft` |
 | Download fails or login is required | Check whether the URL is valid; set `SUBTRANS_COOKIES` to a cookies file when needed |
 | Frontend cannot connect to backend | Confirm the backend runs at `http://localhost:8000`, or override the address with `SUBTRANS_API_BASE_URL` in browser `localStorage` |
 | Translation reports missing key | Confirm `.env` contains `SUBTRANS_DEEPSEEK_API_KEY` or `DEEPSEEK_API_KEY`, then restart the backend |
