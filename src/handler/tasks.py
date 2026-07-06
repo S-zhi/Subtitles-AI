@@ -72,10 +72,19 @@ def delete_task(task_id: str, store: TaskStore = Depends(get_store)) -> None:
 
 @router.post("/{task_id}/retry", response_model=TaskOut)
 def retry_task(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
-    _require(store, task_id)
-    store.update(task_id, status="PENDING", progress=0, current_step=None, error=None)
+    """仅允许失败任务重新入队，避免运行中任务重复执行。"""
+    rec = _require(store, task_id)
+    if rec.status != "FAILED":
+        raise HTTPException(status_code=409, detail="只有失败任务可以重试")
+    updated = store.update(
+        task_id,
+        status="PENDING",
+        progress=0,
+        current_step=None,
+        error=None,
+    )
     enqueue_pipeline(task_id)
-    return to_out(store.get(task_id))
+    return to_out(updated)
 
 
 # ---------- 文件下载 ----------

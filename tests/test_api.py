@@ -113,15 +113,36 @@ def test_delete_missing_404(client):
 
 # ---------- 重试 ----------
 
-def test_retry_resets_status(client):
+def test_retry_resets_status(client, monkeypatch):
+    """失败任务重试时应重置状态并重新入队。"""
     cid = client.post("/api/tasks", json=_payload()).json()["id"]
     client._store.update(cid, status="FAILED", progress=40, error="boom")
+    enqueued = []
+    monkeypatch.setattr(tasks_routes, "enqueue_pipeline", enqueued.append)
+
     r = client.post(f"/api/tasks/{cid}/retry")
     assert r.status_code == 200
     data = r.json()
     assert data["status"] == "PENDING"
     assert data["progress"] == 0
     assert data["error"] is None
+    assert enqueued == [cid]
+
+
+def test_retry_running_task_returns_409(client, monkeypatch):
+    """运行中任务重试应返回 409 且不能重复入队。"""
+    cid = client.post("/api/tasks", json=_payload()).json()["id"]
+    client._store.update(cid, status="DOWNLOADING", progress=10, current_step="DOWNLOADING")
+    enqueued = []
+    monkeypatch.setattr(tasks_routes, "enqueue_pipeline", enqueued.append)
+
+    r = client.post(f"/api/tasks/{cid}/retry")
+
+    assert r.status_code == 409
+    assert enqueued == []
+    rec = client._store.get(cid)
+    assert rec.status == "DOWNLOADING"
+    assert rec.progress == 10
 
 
 # ---------- 文件下载 ----------
