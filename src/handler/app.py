@@ -10,18 +10,19 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.config import settings
 from src.handler import health, srt, tasks
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="字幕翻译工作台 API", version="0.1.0")
 
-    # 本机开发：放开跨域，前端可从任意端口访问
+    # 本机工作台：只允许配置中的前端来源访问 API。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=list(settings.cors_allow_origins),
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
     )
 
     # 按业务挂载路由，后续新增业务在此 include 即可

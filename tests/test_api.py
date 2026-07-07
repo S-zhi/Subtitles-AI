@@ -155,3 +155,29 @@ def test_success_task_exposes_outputs(client):
 
 def test_health(client):
     assert client.get("/api/health").json() == {"ok": True}
+
+
+# ---------- CORS ----------
+
+def test_cors_allows_local_workbench_origin(client):
+    r = client.options(
+        "/api/tasks",
+        headers={
+            "Origin": "http://localhost:5273",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == "http://localhost:5273"
+
+
+def test_cors_rejects_untrusted_origin(client):
+    r = client.options(
+        "/api/tasks",
+        headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert r.status_code == 400
+    assert "access-control-allow-origin" not in r.headers

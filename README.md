@@ -156,6 +156,7 @@ uv run python main.py "<视频URL>" --target zh-CN --source auto --mode bilingua
 | `SUBTRANS_DATA_DIR` | 否 | `./data` | 任务产物根目录 |
 | `SUBTRANS_DB` | 否 | `./app.db` | SQLite 任务库路径 |
 | `SUBTRANS_WORKERS` | 否 | `2` | 后台流水线并发任务数 |
+| `SUBTRANS_CORS_ORIGINS` | 否 | `http://localhost:5273,http://127.0.0.1:5273` | 允许访问后端 API 的前端来源，多个值用英文逗号分隔 |
 | `SUBTRANS_DL_FORMAT` | 否 | `bv*+ba/b` | yt-dlp 格式选择 |
 | `SUBTRANS_DL_CONTAINER` | 否 | `mp4` | 下载合并后的容器格式 |
 | `SUBTRANS_DL_RETRIES` | 否 | `3` | 下载失败重试次数 |

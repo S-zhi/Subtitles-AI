@@ -156,6 +156,7 @@ uv run python main.py "<video-url>" --target zh-CN --source auto --mode bilingua
 | `SUBTRANS_DATA_DIR` | No | `./data` | Root directory for job artifacts |
 | `SUBTRANS_DB` | No | `./app.db` | SQLite database path |
 | `SUBTRANS_WORKERS` | No | `2` | Number of background pipeline workers |
+| `SUBTRANS_CORS_ORIGINS` | No | `http://localhost:5273,http://127.0.0.1:5273` | Frontend origins allowed to access the backend API, separated by commas |
 | `SUBTRANS_DL_FORMAT` | No | `bv*+ba/b` | yt-dlp format selector |
 | `SUBTRANS_DL_CONTAINER` | No | `mp4` | Merged download container format |
 | `SUBTRANS_DL_RETRIES` | No | `3` | Download retry count |
