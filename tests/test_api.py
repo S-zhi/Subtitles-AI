@@ -73,6 +73,28 @@ def test_create_missing_url_422(client):
     assert r.status_code == 422
 
 
+def test_create_rejects_invalid_enum_params(client, monkeypatch):
+    """非法枚举参数应在创建前返回 422，且不能入队。"""
+    enqueued = []
+    monkeypatch.setattr(tasks_routes, "enqueue_pipeline", enqueued.append)
+
+    assert client.post("/api/tasks", json=_payload(mode="mixed")).status_code == 422
+    assert client.post("/api/tasks", json=_payload(burn="weird")).status_code == 422
+    assert client.post("/api/tasks", json=_payload(engine="other")).status_code == 422
+    assert enqueued == []
+
+
+def test_create_rejects_empty_model_and_languages(client, monkeypatch):
+    """模型和语言字段为空时应在创建前返回 422，且不能入队。"""
+    enqueued = []
+    monkeypatch.setattr(tasks_routes, "enqueue_pipeline", enqueued.append)
+
+    assert client.post("/api/tasks", json=_payload(model="")).status_code == 422
+    assert client.post("/api/tasks", json=_payload(sourceLang="")).status_code == 422
+    assert client.post("/api/tasks", json=_payload(targetLang="")).status_code == 422
+    assert enqueued == []
+
+
 # ---------- 查询 ----------
 
 def test_list_tasks(client):
