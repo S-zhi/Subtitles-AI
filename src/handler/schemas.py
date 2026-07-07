@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.store import TaskRecord
 
@@ -17,12 +17,12 @@ class TaskCreate(BaseModel):
     """POST /api/tasks 的请求体。"""
 
     url: str
-    sourceLang: str = "auto"
-    targetLang: str = "zh-CN"
-    mode: str = "mono"        # mono | bilingual
-    burn: str = "hard"        # hard | soft
-    model: str = "small"
-    engine: str = "deepseek"
+    sourceLang: str = Field(default="auto", min_length=1)
+    targetLang: str = Field(default="zh-CN", min_length=1)
+    mode: Literal["mono", "bilingual"] = "mono"
+    burn: Literal["hard", "soft"] = "hard"
+    model: str = Field(default="small", min_length=1)
+    engine: Literal["deepseek"] = "deepseek"
 
 
 class TaskOut(BaseModel):
