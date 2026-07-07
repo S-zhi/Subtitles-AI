@@ -6,11 +6,31 @@ import { uid, clamp, shortUrl, statusForProgress } from "./utils.js";
 const CFG = window.APP_CONFIG;
 export const USE_MOCK = CFG.USE_MOCK;
 
+// 为普通 REST 请求统一接入超时控制；SSE 订阅保留独立连接策略。
+async function request(base, path, options = {}) {
+  const timeoutMs = Number(CFG.API_TIMEOUT_MS) || 15000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(`${base}${path}`, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (e && e.name === "AbortError") {
+      throw new Error("连接后端超时，请检查 FastAPI 是否启动");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const RealApi = {
   base: CFG.API_BASE_URL,
 
   async createTask(payload) {
-    const res = await fetch(`${this.base}/api/tasks`, {
+    const res = await request(this.base, "/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -20,39 +40,39 @@ const RealApi = {
   },
 
   async listTasks() {
-    const res = await fetch(`${this.base}/api/tasks`);
+    const res = await request(this.base, "/api/tasks");
     if (!res.ok) throw new Error("获取任务列表失败：" + res.status);
     return res.json();
   },
 
   // 获取源视频语言选项。
   async listVideoLanguages() {
-    const res = await fetch(`${this.base}/api/srt/languages`);
+    const res = await request(this.base, "/api/srt/languages");
     if (!res.ok) throw new Error("获取源语言失败：" + res.status);
     return res.json();
   },
 
   // 获取 Whisper 模型权重选项。
   async listModelWeights() {
-    const res = await fetch(`${this.base}/api/srt/model-weights`);
+    const res = await request(this.base, "/api/srt/model-weights");
     if (!res.ok) throw new Error("获取模型列表失败：" + res.status);
     return res.json();
   },
 
   async deleteTask(id) {
-    const res = await fetch(`${this.base}/api/tasks/${id}`, { method: "DELETE" });
+    const res = await request(this.base, `/api/tasks/${id}`, { method: "DELETE" });
     if (!res.ok) throw new Error("删除失败：" + res.status);
   },
 
   async retryTask(id) {
-    const res = await fetch(`${this.base}/api/tasks/${id}/retry`, { method: "POST" });
+    const res = await request(this.base, `/api/tasks/${id}/retry`, { method: "POST" });
     if (!res.ok) throw new Error("重试失败：" + res.status);
     return res.json();
   },
 
   // 请求后端打开任务所在的本地文件夹。
   async openFolder(id) {
-    const res = await fetch(`${this.base}/api/tasks/${id}/folder`, { method: "POST" });
+    const res = await request(this.base, `/api/tasks/${id}/folder`, { method: "POST" });
     if (!res.ok) throw new Error("打开文件夹失败：" + res.status);
   },
 
