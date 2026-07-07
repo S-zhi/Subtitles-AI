@@ -96,7 +96,9 @@ def test_get_missing_404(client):
 # ---------- 删除 ----------
 
 def test_delete_task(client):
+    """终态任务删除时应移除记录和产物目录。"""
     cid = client.post("/api/tasks", json=_payload()).json()["id"]
+    client._store.update(cid, status="SUCCESS", progress=100)
     # 造个产物目录，验证会被清理
     d = client._tmp / cid
     d.mkdir(parents=True, exist_ok=True)
@@ -109,6 +111,19 @@ def test_delete_task(client):
 
 def test_delete_missing_404(client):
     assert client.delete("/api/tasks/nope").status_code == 404
+
+
+def test_delete_running_task_returns_409(client):
+    """运行中任务删除应返回 409，且保留记录和产物目录。"""
+    cid = client.post("/api/tasks", json=_payload()).json()["id"]
+    client._store.update(cid, status="TRANSCRIBING", progress=35, current_step="TRANSCRIBING")
+    d = client._tmp / cid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "audio.wav").write_bytes(b"x")
+
+    assert client.delete(f"/api/tasks/{cid}").status_code == 409
+    assert client.get(f"/api/tasks/{cid}").status_code == 200
+    assert d.exists()
 
 
 # ---------- 重试 ----------
