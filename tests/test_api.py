@@ -95,6 +95,34 @@ def test_create_rejects_empty_model_and_languages(client, monkeypatch):
     assert enqueued == []
 
 
+def test_create_upload_task_persists_options_and_file(client, monkeypatch):
+    """上传视频创建任务时，字幕模式与烧录方式应和链接任务一样入库透传。"""
+    enqueued = []
+    monkeypatch.setattr(tasks_routes, "enqueue_pipeline", enqueued.append)
+
+    r = client.post(
+        "/api/tasks/upload",
+        data={
+            "sourceLang": "en",
+            "targetLang": "ja",
+            "mode": "bilingual",
+            "burn": "soft",
+            "model": "medium",
+            "engine": "deepseek",
+            "needSubtitle": "true",
+        },
+        files={"file": ("clip.mp4", b"VIDEO", "video/mp4")},
+    )
+
+    assert r.status_code == 201
+    data = r.json()
+    assert data["sourceType"] == "upload"
+    assert data["mode"] == "bilingual"
+    assert data["burn"] == "soft"
+    assert enqueued == [data["id"]]
+    assert (client._tmp / data["id"] / "source.mp4").read_bytes() == b"VIDEO"
+
+
 # ---------- 查询 ----------
 
 def test_list_tasks(client):

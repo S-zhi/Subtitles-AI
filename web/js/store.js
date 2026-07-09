@@ -46,7 +46,9 @@ export async function loadTasks() {
 }
 
 export async function createTask(payload) {
-  const t = await Api.createTask(payload);
+  const t = payload.file
+    ? await Api.createUploadTask(payload)
+    : await Api.createTask(payload);
   state.tasks.unshift(t);
   state.filter = "all";
   emit({ type: "created", id: t.id });

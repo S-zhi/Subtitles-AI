@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="styles/console.css" />
     <link rel="stylesheet" href="styles/queue.css" />
     <link rel="stylesheet" href="styles/preview.css" />
+    <link rel="stylesheet" href="styles/probe.css" />
     <script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
   </head>
   <body>
@@ -31,6 +32,9 @@
           </button>
           <button class="nav__item" type="button" data-view="preview">
             <i class="ph ph-monitor-play" aria-hidden="true"></i><span>视频预览</span>
+          </button>
+          <button class="nav__item" type="button" data-view="probe">
+            <i class="ph ph-pulse" aria-hidden="true"></i><span>下载测试</span>
           </button>
         </nav>
 
@@ -65,20 +69,37 @@
                 class="console__input"
                 id="url"
                 name="url"
-                type="url"
+                type="text"
                 inputmode="url"
                 autocomplete="off"
                 aria-label="视频链接"
-                placeholder="粘贴视频页面地址"
-                required
+                placeholder="粘贴视频页面地址，或拖入本地视频"
               />
+              <label class="iconbtn console__upload" for="videoFile" id="uploadBtn" role="button" tabindex="0" aria-label="选择本地视频" title="选择本地视频">
+                <i class="ph ph-upload-simple" aria-hidden="true">
+                  <input
+                    class="console__file"
+                    id="videoFile"
+                    name="videoFile"
+                    type="file"
+                    accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v,.flv,.ts,.mpeg,.mpg,.wmv"
+                  />
+                </i>
+              </label>
               <button class="btn btn--primary console__go" type="submit" id="submitBtn">
                 <i class="ph ph-play" aria-hidden="true"></i><span>开始处理</span>
               </button>
             </div>
-            <p class="console__hint" id="urlHint">粘贴单个视频页面地址，回车或点击开始处理</p>
+            <p class="console__hint" id="urlHint">粘贴单个视频页面地址，或把本地视频拖进输入框</p>
 
             <div class="params">
+              <fieldset class="param" style="border:0;margin:0;padding:0">
+                <span class="param__label">是否需要字幕</span>
+                <div class="segmented" role="radiogroup" aria-label="是否需要字幕">
+                  <label class="segmented__opt"><input type="radio" name="needSubtitle" value="on" checked /><span>需要</span></label>
+                  <label class="segmented__opt"><input type="radio" name="needSubtitle" value="off" /><span>仅下载</span></label>
+                </div>
+              </fieldset>
               <div class="param">
                 <span class="param__label">源语言</span>
                 <select class="select" id="sourceLang" name="sourceLang" aria-label="源语言">
@@ -145,6 +166,48 @@
               <h2>已完成</h2>
               <div class="screening__list" id="previewList"></div>
             </aside>
+          </div>
+        </section>
+
+        <!-- ============ 下载测试 ============ -->
+        <section class="view" data-view="probe" id="view-probe">
+          <div class="probe">
+            <header class="probe__head">
+              <div>
+                <h2>下载测试</h2>
+                <p>检查链接是否能被 yt-dlp 解析并找到可下载格式。</p>
+              </div>
+              <span class="probe__badge"><i class="ph ph-hard-drives" aria-hidden="true"></i>不下载文件</span>
+            </header>
+
+            <form class="probe__panel" id="probeForm" novalidate>
+              <div class="probe__bar" id="probeBar">
+                <span class="probe__icon" aria-hidden="true"><i class="ph ph-link-simple"></i></span>
+                <input
+                  class="probe__input"
+                  id="probeUrl"
+                  name="probeUrl"
+                  type="url"
+                  inputmode="url"
+                  autocomplete="off"
+                  aria-label="测试链接"
+                  placeholder="粘贴要测试的视频页面地址"
+                  required
+                />
+                <button class="btn btn--primary probe__go" id="probeBtn" type="submit">
+                  <i class="ph ph-pulse" aria-hidden="true"></i><span>开始测试</span>
+                </button>
+              </div>
+              <p class="probe__hint" id="probeHint">等待输入链接</p>
+            </form>
+
+            <div class="probe-result is-idle" id="probeResult" aria-live="polite">
+              <div class="probe-result__icon"><i class="ph ph-link" aria-hidden="true"></i></div>
+              <div class="probe-result__body">
+                <div class="probe-result__title">未开始</div>
+                <div class="probe-result__desc">结果会显示在这里。</div>
+              </div>
+            </div>
           </div>
         </section>
       </main>

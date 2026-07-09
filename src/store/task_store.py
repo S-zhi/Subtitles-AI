@@ -36,6 +36,8 @@ class TaskRecord:
     burn: str          # hard | soft
     model: str         # whisper 模型
     engine: str        # 翻译引擎，目前 deepseek
+    source_type: str = "url"  # url=在线链接下载 upload=本地上传视频
+    need_subtitle: int = 1  # 1=需要字幕(完整流水线) 0=仅下载视频
     status: str = "PENDING"
     progress: int = 0
     current_step: Optional[str] = None
@@ -85,6 +87,8 @@ class TaskStore:
                     burn TEXT NOT NULL,
                     model TEXT NOT NULL,
                     engine TEXT NOT NULL,
+                    source_type TEXT NOT NULL DEFAULT 'url',
+                    need_subtitle INTEGER NOT NULL DEFAULT 1,
                     status TEXT NOT NULL,
                     progress INTEGER NOT NULL,
                     current_step TEXT,
@@ -97,6 +101,12 @@ class TaskStore:
                 )
                 """
             )
+            # 轻量迁移：给旧库补上后加的列
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+            if "need_subtitle" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN need_subtitle INTEGER NOT NULL DEFAULT 1")
+            if "source_type" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN source_type TEXT NOT NULL DEFAULT 'url'")
 
     # ---------- 增 ----------
     def create(
@@ -109,6 +119,9 @@ class TaskStore:
         burn: str,
         model: str,
         engine: str,
+        source_type: str = "url",
+        need_subtitle: bool = True,
+        title: Optional[str] = None,
     ) -> TaskRecord:
         now = _now_ms()
         rec = TaskRecord(
@@ -120,6 +133,9 @@ class TaskStore:
             burn=burn,
             model=model,
             engine=engine,
+            source_type=source_type,
+            need_subtitle=int(need_subtitle),
+            title=title,
             status="PENDING",
             progress=0,
             created_at=now,

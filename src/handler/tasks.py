@@ -11,14 +11,16 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import List
+from pathlib import Path
+from typing import List, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
-from src.config import OUTPUT_VIDEO, TRANSLATED_SRT, task_dir
+from src.config import OUTPUT_VIDEO, SOURCE_VIDEO_STEM, TRANSLATED_SRT, task_dir
+from src.core.downloader import probe_video
 from src.handler.deps import get_store
-from src.handler.schemas import TaskCreate, TaskOut, to_out
+from src.handler.schemas import TaskCreate, TaskOut, TaskProbeIn, TaskProbeOut, to_out
 from src.service.runner import enqueue_pipeline
 from src.store import TaskStore
 
@@ -27,6 +29,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 _TERMINAL = {"SUCCESS", "FAILED"}
+
+# 允许上传的本地视频扩展名（小写，含点）
+_UPLOAD_VIDEO_EXTS = {
+    ".mp4", ".mov", ".mkv", ".webm", ".avi",
+    ".m4v", ".flv", ".ts", ".mpeg", ".mpg", ".wmv",
+}
 
 
 def _require(store: TaskStore, task_id: str):
@@ -48,9 +56,70 @@ def create_task(body: TaskCreate, store: TaskStore = Depends(get_store)) -> Task
         burn=body.burn,
         model=body.model,
         engine=body.engine,
+        need_subtitle=body.needSubtitle,
     )
     enqueue_pipeline(rec.id)  # 第 2 步接入真正执行
     return to_out(rec)
+
+
+@router.post("/upload", response_model=TaskOut, status_code=201)
+def create_upload_task(
+    file: UploadFile = File(..., description="本地视频文件"),
+    sourceLang: str = Form("auto", min_length=1),
+    targetLang: str = Form("zh-CN", min_length=1),
+    mode: Literal["mono", "bilingual"] = Form("mono"),
+    burn: Literal["hard", "soft"] = Form("hard"),
+    model: str = Form("small", min_length=1),
+    engine: Literal["deepseek"] = Form("deepseek"),
+    needSubtitle: bool = Form(True),
+    store: TaskStore = Depends(get_store),
+) -> TaskOut:
+    """上传本地视频并创建任务：源文件直接落盘，跳过下载，走后续识别 / 翻译 / 烧录。
+
+    字幕模式（mode）与烧录方式（burn）与链接任务同样透传到下层流水线。
+    """
+    filename = (file.filename or "").strip()
+    ext = Path(filename).suffix.lower()
+    if ext not in _UPLOAD_VIDEO_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的视频格式：{ext or '未知'}（支持 {', '.join(sorted(_UPLOAD_VIDEO_EXTS))}）",
+        )
+
+    # 先建记录拿到 task_id，再把源文件落盘到该任务目录
+    rec = store.create(
+        url=filename,
+        source_lang=sourceLang,
+        target_lang=targetLang,
+        mode=mode,
+        burn=burn,
+        model=model,
+        engine=engine,
+        source_type="upload",
+        need_subtitle=needSubtitle,
+        title=Path(filename).stem or "上传的视频",
+    )
+
+    d = task_dir(rec.id)
+    d.mkdir(parents=True, exist_ok=True)
+    dest = d / f"{SOURCE_VIDEO_STEM}{ext}"
+    try:
+        with dest.open("wb") as out:
+            shutil.copyfileobj(file.file, out)  # 流式写盘，避免整文件入内存
+    except Exception as e:
+        store.delete(rec.id)
+        shutil.rmtree(d, ignore_errors=True)
+        raise HTTPException(status_code=500, detail="保存上传文件失败") from e
+    finally:
+        file.file.close()
+
+    if not dest.exists() or dest.stat().st_size == 0:
+        store.delete(rec.id)
+        shutil.rmtree(d, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="上传的视频文件为空")
+
+    enqueue_pipeline(rec.id)
+    return to_out(store.get(rec.id) or rec)
 
 
 @router.get("", response_model=List[TaskOut])
@@ -61,6 +130,22 @@ def list_tasks(store: TaskStore = Depends(get_store)) -> List[TaskOut]:
 @router.get("/{task_id}", response_model=TaskOut)
 def get_task(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
     return to_out(_require(store, task_id))
+
+
+@router.post("/probe", response_model=TaskProbeOut)
+def probe_task(body: TaskProbeIn) -> TaskProbeOut:
+    """探测视频链接是否能被 yt-dlp 解析并找到可下载格式。"""
+    result = probe_video(body.url)
+    return TaskProbeOut(
+        ok=result.ok,
+        title=result.title,
+        extractor=result.extractor,
+        duration=result.duration,
+        formatsCount=result.formats_count,
+        webpageUrl=result.webpage_url,
+        reason=result.reason,
+        detail=result.detail,
+    )
 
 
 @router.delete("/{task_id}", status_code=204)
@@ -92,10 +177,21 @@ def retry_task(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
 @router.get("/{task_id}/download")
 def download_video(task_id: str, store: TaskStore = Depends(get_store)):
     _require(store, task_id)
-    path = task_dir(task_id) / OUTPUT_VIDEO
-    if not path.exists():
+    path = _resolve_video(task_id)
+    if path is None:
         raise HTTPException(status_code=409, detail="成品视频尚未生成")
     return FileResponse(path, media_type="video/mp4", filename=f"{task_id}.mp4")
+
+
+def _resolve_video(task_id: str):
+    """定位可下载的视频：优先烧录成品 output.mp4，仅下载模式回退到 source.*。"""
+    d = task_dir(task_id)
+    out = d / OUTPUT_VIDEO
+    if out.exists():
+        return out
+    for p in sorted(d.glob(f"{SOURCE_VIDEO_STEM}.*")):
+        return p
+    return None
 
 
 @router.get("/{task_id}/subtitle")

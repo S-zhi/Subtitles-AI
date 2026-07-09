@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
+from src.config import SOURCE_VIDEO_STEM, task_dir
 from src.core.audio_extractor import extract_audio
 from src.core.downloader import download_video
 from src.core.subtitle_burner import burn_subtitles
@@ -20,6 +22,10 @@ from src.core.transcriber import transcribe
 from src.core.translator import translate_srt
 
 logger = logging.getLogger(__name__)
+
+
+class PipelineError(RuntimeError):
+    """流水线编排阶段的错误（如上传源缺失）。"""
 
 
 @dataclass
@@ -32,6 +38,9 @@ class PipelineParams:
     burn: str = "hard"     # hard | soft
     model: str = "small"
     engine: str = "deepseek"
+    source_type: str = "url"    # url=在线链接下载 upload=本地上传视频
+    need_subtitle: bool = True  # False = 仅下载视频，跳过识别/翻译/烧录
+    title: Optional[str] = None  # 上传模式下用原始文件名作为展示标题
 
 
 @dataclass
@@ -93,10 +102,33 @@ def run_pipeline(
 
     try:
         emit("DOWNLOADING", 0)
-        dl = download_video(params.url, tid, on_progress=step_cb("DOWNLOADING"))
+
+        # 第①步获取源视频：上传模式复用本地文件、跳过下载；链接模式走 yt-dlp。
+        if params.source_type == "upload":
+            video_path = _locate_uploaded_source(tid)
+            title = params.title or video_path.stem
+            emit("DOWNLOADING", 20)  # 本地视频已就位，"下载/载入"阶段直接完成
+        elif not params.need_subtitle:
+            # 仅下载模式：下载占满整条进度，跳过识别/翻译/烧录
+            dl = download_video(
+                params.url, tid,
+                on_progress=lambda p: emit("DOWNLOADING", _scale(0, 100, getattr(p, "percent", None))),
+            )
+            video_path, title = dl.video_path, dl.title
+        else:
+            dl = download_video(params.url, tid, on_progress=step_cb("DOWNLOADING"))
+            video_path, title = dl.video_path, dl.title
+
+        # 仅下载 / 仅载入本地视频：不做字幕处理，直接以源视频完成
+        if not params.need_subtitle:
+            outputs = {"video": str(video_path)}
+            final = PipelineEvent("SUCCESS", 100, None, title=title, outputs=outputs)
+            on_event(final)
+            logger.info("仅获取视频完成: task=%s source=%s", tid, params.source_type)
+            return final
 
         emit("EXTRACTING", 20)
-        au = extract_audio(dl.video_path, tid, on_progress=step_cb("EXTRACTING"))
+        au = extract_audio(video_path, tid, on_progress=step_cb("EXTRACTING"))
 
         emit("TRANSCRIBING", 35)
         tr = transcribe(
@@ -117,13 +149,13 @@ def run_pipeline(
 
         emit("BURNING", 85)
         bn = burn_subtitles(
-            dl.video_path, tl.srt_path, tid,
+            video_path, tl.srt_path, tid,
             mode=params.burn,
             on_progress=step_cb("BURNING"),
         )
 
         outputs = {"video": str(bn.output_path), "subtitle": str(tl.srt_path)}
-        final = PipelineEvent("SUCCESS", 100, None, title=dl.title, outputs=outputs)
+        final = PipelineEvent("SUCCESS", 100, None, title=title, outputs=outputs)
         on_event(final)
         logger.info("流水线完成: task=%s", tid)
         return final
@@ -137,3 +169,12 @@ def run_pipeline(
             error=str(e),
         ))
         raise
+
+
+def _locate_uploaded_source(task_id: str) -> Path:
+    """定位上传模式下预先落盘的源视频 data/{task_id}/source.*。"""
+    d = task_dir(task_id)
+    for p in sorted(d.glob(f"{SOURCE_VIDEO_STEM}.*")):
+        if p.is_file():
+            return p
+    raise PipelineError("上传的视频文件缺失，无法开始处理")

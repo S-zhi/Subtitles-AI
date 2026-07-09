@@ -148,3 +148,69 @@ def test_pipeline_passes_options(monkeypatch):
         "model": "medium", "language": "en",
         "target": "ja", "mode": "bilingual", "burn": "soft",
     }
+
+
+def test_pipeline_upload_skips_download_and_honors_options(monkeypatch, tmp_path):
+    """上传模式：跳过下载、复用本地源文件，且字幕模式 / 烧录方式透传到下层。"""
+    src = tmp_path / "source.mp4"
+    src.write_bytes(b"VID")
+    monkeypatch.setattr(orchestrator, "task_dir", lambda tid: tmp_path)
+
+    calls = []
+    seen = {}
+
+    def fail_download(*a, **k):
+        calls.append("download")
+        raise AssertionError("上传模式不应调用下载")
+
+    def fake_extract(video, tid, **kw):
+        calls.append("extract")
+        seen["extract_video"] = video
+        return SimpleNamespace(audio_path=Path("/d/audio.wav"))
+
+    def fake_translate(srt, tid, s, t, **kw):
+        calls.append("translate")
+        seen["mode"] = kw.get("mode")
+        return SimpleNamespace(srt_path=Path("/d/translated.srt"))
+
+    def fake_burn(video, srt, tid, **kw):
+        calls.append("burn")
+        seen["burn"] = kw.get("mode")
+        seen["burn_video"] = video
+        return SimpleNamespace(output_path=Path("/d/output.mp4"))
+
+    def fake_transcribe(*a, **k):
+        calls.append("transcribe")
+        return SimpleNamespace(srt_path=Path("/d/original.srt"))
+
+    monkeypatch.setattr(orchestrator, "download_video", fail_download)
+    monkeypatch.setattr(orchestrator, "extract_audio", fake_extract)
+    monkeypatch.setattr(orchestrator, "transcribe", fake_transcribe)
+    monkeypatch.setattr(orchestrator, "translate_srt", fake_translate)
+    monkeypatch.setattr(orchestrator, "burn_subtitles", fake_burn)
+
+    params = PipelineParams(
+        task_id="t1", url="clip.mp4", source_lang="auto", target_lang="zh-CN",
+        mode="bilingual", burn="soft", source_type="upload", title="Clip",
+    )
+    events = []
+    result = run_pipeline(params, events.append)
+
+    assert calls == ["extract", "transcribe", "translate", "burn"]  # 无 download
+    assert seen["extract_video"] == src and seen["burn_video"] == src  # 复用上传源
+    assert seen["mode"] == "bilingual" and seen["burn"] == "soft"      # 透传生效
+    assert result.status == "SUCCESS" and result.title == "Clip"
+    assert result.outputs == {"video": "/d/output.mp4", "subtitle": "/d/translated.srt"}
+
+
+def test_pipeline_upload_missing_source_fails(monkeypatch, tmp_path):
+    """上传源文件缺失时应发 FAILED 并抛出。"""
+    monkeypatch.setattr(orchestrator, "task_dir", lambda tid: tmp_path)  # 空目录
+    params = PipelineParams(
+        task_id="t1", url="clip.mp4", source_lang="auto", target_lang="zh-CN",
+        source_type="upload",
+    )
+    events = []
+    with pytest.raises(orchestrator.PipelineError):
+        run_pipeline(params, events.append)
+    assert events[-1].status == "FAILED"

@@ -15,7 +15,7 @@ from src.handler import health, srt, tasks
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="字幕翻译工作台 API", version="0.1.0")
+    app = FastAPI(title="Subtitles AI API", version="0.1.0")
 
     # 本机工作台：只允许配置中的前端来源访问 API。
     app.add_middleware(

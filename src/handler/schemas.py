@@ -23,6 +23,26 @@ class TaskCreate(BaseModel):
     burn: Literal["hard", "soft"] = "hard"
     model: str = Field(default="small", min_length=1)
     engine: Literal["deepseek"] = "deepseek"
+    needSubtitle: bool = True  # False = 仅下载视频，跳过识别/翻译/烧录
+
+
+class TaskProbeIn(BaseModel):
+    """POST /api/tasks/probe 的请求体。"""
+
+    url: str = Field(min_length=1)
+
+
+class TaskProbeOut(BaseModel):
+    """视频链接探针的响应体。"""
+
+    ok: bool
+    title: Optional[str] = None
+    extractor: Optional[str] = None
+    duration: Optional[float] = None
+    formatsCount: int = 0
+    webpageUrl: Optional[str] = None
+    reason: Optional[str] = None
+    detail: Optional[str] = None
 
 
 class TaskOut(BaseModel):
@@ -37,6 +57,8 @@ class TaskOut(BaseModel):
     burn: str
     model: str
     engine: str
+    sourceType: str
+    needSubtitle: bool
     status: str
     progress: int
     currentStep: Optional[str]
@@ -48,12 +70,12 @@ class TaskOut(BaseModel):
 
 def to_out(rec: TaskRecord) -> TaskOut:
     """TaskRecord(snake_case) -> TaskOut(camelCase)。"""
+    need_subtitle = bool(rec.need_subtitle)
     outputs = None
     if rec.status == "SUCCESS":
-        outputs = {
-            "video": f"/api/tasks/{rec.id}/download",
-            "subtitle": f"/api/tasks/{rec.id}/subtitle",
-        }
+        outputs = {"video": f"/api/tasks/{rec.id}/download"}
+        if need_subtitle:
+            outputs["subtitle"] = f"/api/tasks/{rec.id}/subtitle"
     return TaskOut(
         id=rec.id,
         url=rec.url,
@@ -64,6 +86,8 @@ def to_out(rec: TaskRecord) -> TaskOut:
         burn=rec.burn,
         model=rec.model,
         engine=rec.engine,
+        sourceType=rec.source_type,
+        needSubtitle=need_subtitle,
         status=rec.status,
         progress=rec.progress,
         currentStep=rec.current_step,

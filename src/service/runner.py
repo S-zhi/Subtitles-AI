@@ -49,6 +49,9 @@ def _run(task_id: str) -> None:
         burn=rec.burn,
         model=rec.model,
         engine=rec.engine,
+        source_type=rec.source_type,
+        need_subtitle=bool(rec.need_subtitle),
+        title=rec.title,
     )
 
     def on_event(ev: PipelineEvent) -> None:

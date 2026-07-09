@@ -44,6 +44,18 @@ def test_get_roundtrip(store):
     assert got == rec  # dataclass 相等
 
 
+def test_create_defaults_source_type_url(store):
+    rec = _create(store)
+    assert rec.source_type == "url"
+
+
+def test_create_upload_persists_source_type_and_title(store):
+    rec = _create(store, source_type="upload", title="my clip")
+    got = store.get(rec.id)
+    assert got.source_type == "upload"
+    assert got.title == "my clip"
+
+
 def test_get_missing(store):
     assert store.get("nope") is None
 

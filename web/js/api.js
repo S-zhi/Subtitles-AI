@@ -26,6 +26,19 @@ async function request(base, path, options = {}) {
   }
 }
 
+async function errorText(res) {
+  // 提取后端错误详情，便于定位 422 这类参数校验失败。
+  try {
+    const data = await res.json();
+    if (Array.isArray(data.detail)) {
+      return `${res.status} ${data.detail.map((item) => `${item.loc?.join(".")}: ${item.msg}`).join("; ")}`;
+    }
+    return `${res.status} ${data.detail || JSON.stringify(data)}`;
+  } catch (e) {
+    return String(res.status);
+  }
+}
+
 const RealApi = {
   base: CFG.API_BASE_URL,
 
@@ -36,6 +49,40 @@ const RealApi = {
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error("创建任务失败：" + res.status);
+    return res.json();
+  },
+
+  // 上传本地视频并创建后续字幕处理任务。
+  async createUploadTask(payload) {
+    if (!(payload.file instanceof File)) {
+      throw new Error("请先选择本地视频文件");
+    }
+    const body = new FormData();
+    body.append("file", payload.file, payload.file.name);
+    body.append("sourceLang", payload.sourceLang);
+    body.append("targetLang", payload.targetLang);
+    body.append("mode", payload.mode);
+    body.append("burn", payload.burn);
+    body.append("model", payload.model);
+    body.append("engine", payload.engine);
+    body.append("needSubtitle", String(payload.needSubtitle));
+
+    const res = await request(this.base, "/api/tasks/upload", {
+      method: "POST",
+      body,
+    });
+    if (!res.ok) throw new Error("上传任务创建失败：" + await errorText(res));
+    return res.json();
+  },
+
+  // 探测链接是否能被 yt-dlp 解析并找到可下载格式。
+  async probeVideo(url) {
+    const res = await request(this.base, "/api/tasks/probe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) throw new Error("链接校验失败：" + res.status);
     return res.json();
   },
 
@@ -147,6 +194,31 @@ const MockApi = (() => {
         status: "PENDING", progress: 0, error: null, createdAt: Date.now(), outputs: null, _sim: true,
       };
       tasks.unshift(t); persist(); await delay(150); return { ...t };
+    },
+    // 示例模式下模拟本地视频上传任务。
+    async createUploadTask(payload) {
+      const t = {
+        id: uid(), url: payload.file?.name || "uploaded-video", title: payload.file?.name || null,
+        sourceLang: payload.sourceLang, targetLang: payload.targetLang,
+        mode: payload.mode, burn: payload.burn, model: payload.model, engine: payload.engine,
+        sourceType: "upload", needSubtitle: payload.needSubtitle,
+        status: "PENDING", progress: 0, error: null, createdAt: Date.now(), outputs: null, _sim: true,
+      };
+      tasks.unshift(t); persist(); await delay(180); return { ...t };
+    },
+    // 示例模式下模拟链接探测成功。
+    async probeVideo(url) {
+      await delay(180);
+      return {
+        ok: /^https?:\/\/.+/i.test(url),
+        title: "示例视频 · " + shortUrl(url),
+        extractor: "Mock",
+        duration: 90,
+        formatsCount: 3,
+        webpageUrl: url,
+        reason: /^https?:\/\/.+/i.test(url) ? null : "请输入有效的视频链接",
+        detail: null,
+      };
     },
     async listTasks() { await delay(300); return tasks.map((t) => ({ ...t })); },
     // 示例模式下返回常用源语言选项。
