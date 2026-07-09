@@ -55,13 +55,14 @@ export async function createTask(payload) {
 }
 
 export async function deleteTask(id) {
+  // 后端确认删除成功后再更新本地状态，避免失败时任务从界面消失。
+  await Api.deleteTask(id);
   const u = subs.get(id);
   if (u) u();
   subs.delete(id);
   state.tasks = state.tasks.filter((t) => t.id !== id);
   if (state.previewId === id) state.previewId = null;
   emit({ type: "deleted", id });
-  await Api.deleteTask(id);
 }
 
 export async function retryTask(id) {
