@@ -150,7 +150,10 @@ def probe_task(body: TaskProbeIn) -> TaskProbeOut:
 
 @router.delete("/{task_id}", status_code=204)
 def delete_task(task_id: str, store: TaskStore = Depends(get_store)) -> None:
-    _require(store, task_id)
+    """仅允许删除终态任务，避免运行中流水线继续写回孤儿产物。"""
+    rec = _require(store, task_id)
+    if rec.status not in _TERMINAL:
+        raise HTTPException(status_code=409, detail="运行中任务不能删除")
     store.delete(task_id)
     shutil.rmtree(task_dir(task_id), ignore_errors=True)  # 连产物目录一起清
 
